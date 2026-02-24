@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test - ASTRA Backend</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border: 1px solid #ddd;
+        }
+        
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-bottom: 3px solid #34495e;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            font-size: 13px;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+        
+        .controls {
+            padding: 20px;
+            background: #fafafa;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+            font-family: monospace;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #2c3e50;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            font-size: 14px;
+            cursor: pointer;
+            background: #34495e;
+            color: white;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #2c3e50;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 12px;
+            margin-bottom: 15px;
+            border-left: 3px solid #ccc;
+            font-size: 13px;
+            font-family: monospace;
+        }
+        
+        .connected {
+            background: #f0f9ff;
+            border-left-color: #0066cc;
+            color: #003d7a;
+        }
+        
+        .disconnected {
+            background: #fff5f5;
+            border-left-color: #cc0000;
+            color: #7a0000;
+        }
+        
+        .info {
+            background: #f9f9f9;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        
+        .info code {
+            background: #e8e8e8;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .count {
+            display: inline-block;
+            background: #e0e0e0;
+            padding: 2px 8px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        
+        .events {
+            border: 1px solid #ddd;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        
+        .event {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .event:last-child {
+            border-bottom: none;
+        }
+        
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .event-type {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .event-time {
+            color: #666;
+            font-size: 11px;
+        }
+        
+        .event-data {
+            background: #f8f8f8;
+            padding: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #333;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>WebSocket Test Interface</h1>
+            <p>ASTRA Backend - Real-time Note Broadcasting</p>
+        </div>
+        
+        <div class="controls">
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="sessionId" 
+                    placeholder="Session ID (e.g., test_session)" 
+                    value="test_session"
+                >
+                <button onclick="connect()" id="connectBtn">Connect</button>
+                <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
+            </div>
+            
+            <div id="status" class="status disconnected">
+                Status: Disconnected
+            </div>
+            
+            <div class="info">
+                <strong>Test Instructions:</strong><br>
+                1. Ensure backend is running: <code>uvicorn app.main:app --reload</code><br>
+                2. Click Connect<br>
+                3. Create a note via API to see real-time broadcast:<br>
+                <code>curl -X POST http://localhost:8000/api/sessions/test_session/notes -H "Content-Type: application/json" -d '{"content":"Test note","type":"observation"}'</code>
+            </div>
+        </div>
+        
+        <div class="content">
+            <div class="section-title">
+                Received Events
+                <span class="count" id="eventCount">0</span>
+            </div>
+            
+            <div class="events" id="eventsContainer">
+                <div class="empty">
+                    Waiting for events...<br>
+                    <small>Connect and create a note to see real-time updates</small>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let ws;
+        let eventCount = 0;
+        
+        function updateStatus(connected, message) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = connected ? 'status connected' : 'status disconnected';
+            statusDiv.textContent = 'Status: ' + message;
+        }
+        
+        function updateButtons(connected) {
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+        }
+        
+        function connect() {
+            const sid = document.getElementById('sessionId').value.trim();
+            
+            if (!sid) {
+                alert('Please enter a Session ID');
+                return;
+            }
+            
+            ws = new WebSocket(`ws://localhost:8000/ws/sessions/${sid}`);
+            
+            ws.onopen = () => {
+                updateStatus(true, `Connected to session: ${sid}`);
+                updateButtons(true);
+                console.log('WebSocket connected');
+            };
+            
+            ws.onmessage = (event) => {
+                console.log('Received:', event.data);
+                const msg = JSON.parse(event.data);
+                addEvent(msg);
+            };
+            
+            ws.onclose = (event) => {
+                updateStatus(false, `Disconnected (code: ${event.code})`);
+                updateButtons(false);
+                console.log('WebSocket closed');
+            };
+            
+            ws.onerror = (error) => {
+                updateStatus(false, 'Connection error - check if backend is running');
+                updateButtons(false);
+                console.error('WebSocket error:', error);
+            };
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function addEvent(msg) {
+            const container = document.getElementById('eventsContainer');
+            
+            const empty = container.querySelector('.empty');
+            if (empty) {
+                empty.remove();
+            }
+            
+            eventCount++;
+            document.getElementById('eventCount').textContent = eventCount;
+            
+            const eventDiv = document.createElement('div');
+            eventDiv.className = 'event';
+            
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0];
+            
+            eventDiv.innerHTML = `
+                <div class="event-header">
+                    <div class="event-type">${msg.event}</div>
+                    <div class="event-time">${timeStr}</div>
+                </div>
+                <div class="event-data">${JSON.stringify(msg.data, null, 2)}</div>
+            `;
+            
+            container.insertBefore(eventDiv, container.firstChild);
+            
+            while (container.children.length > 50) {
+                container.removeChild(container.lastChild);
+            }
+        }
+        
+        window.onload = () => {
+            document.getElementById('sessionId').focus();
+        };
+        
+        document.getElementById('sessionId').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                connect();
+            }
+        });
+    </script>
+</body>
+</html>
