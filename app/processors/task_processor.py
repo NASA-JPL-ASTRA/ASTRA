@@ -43,6 +43,7 @@ from app.database.models.TaskModels import Task, TaskStatus
 from app.model_pool.AsyncModelPool import AsyncModelPool
 from app.services.callback_service import CallbackService
 from app.utils.file_utils import FileUtils
+from app.utils.hallucination_filter import is_likely_hallucination
 from app.utils.logging_utils import configure_logging
 from config.settings import Settings
 
@@ -436,11 +437,20 @@ class TaskProcessor:
                     raise ValueError(f"Trying to process task with unsupported engine: {self.model_pool.engine}")
 
                 # 通用的结果结构 | Common result structure
+                text = " ".join([seg['text'] for seg in segments]).strip()
                 result = {
-                    "text": " ".join([seg['text'] for seg in segments]).strip(),
+                    "text": text,
                     "segments": segments,
                     "info": info
                 }
+
+                # 过滤幻觉/噪音：不将无效内容存入数据库 | Filter hallucinations/noise: do not store invalid content
+                if Settings.WhisperServiceSettings.FILTER_HALLUCINATION and is_likely_hallucination(text, segments):
+                    result["text"] = ""
+                    result["segments"] = []
+                    result["filtered"] = True
+                    result["filtered_reason"] = "noise"
+                    self.logger.info(f"Task {task.id}: filtered as noise/hallucination, result.text cleared")
 
                 # 记录任务结束时间 | Record task end time
                 task_end_time: datetime.datetime = datetime.datetime.now()

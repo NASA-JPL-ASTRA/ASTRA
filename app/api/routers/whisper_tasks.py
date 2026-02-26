@@ -30,7 +30,7 @@
 # ==============================================================================
 
 import traceback
-from typing import Union
+from typing import Union, Optional
 from urllib.parse import urlparse
 
 from fastapi import Request, APIRouter, UploadFile, File, HTTPException, Form, BackgroundTasks, Query, status, Body
@@ -544,7 +544,11 @@ async def task_delete(
             )
 async def task_result(
         request: Request,
-        task_id: int = Query(description="任务ID / Task ID")
+        task_id: int = Query(description="任务ID / Task ID"),
+        format: Optional[str] = Query(
+            "default",
+            description="输出格式: 'default' 返回完整任务信息, 'astra' 返回 ASTRA/Backend 集成用的简化格式 / Output format: 'default' for full task info, 'astra' for ASTRA Backend integration"
+        )
 ):
     """
     # [中文]
@@ -633,6 +637,27 @@ async def task_result(
             )
 
         # 任务已完成 - 返回200 | Task is completed - return 200
+        # ASTRA 格式: 返回 Backend 集成用的简化结构 | ASTRA format: simplified structure for Backend integration
+        if format and format.lower() == "astra":
+            result = task.result or {}
+            segments = result.get("segments", [])
+            astra_data = {
+                "session_id": task.platform or f"task-{task.id}",
+                "task_id": task.id,
+                "transcript": result.get("text", ""),
+                "segments": [
+                    {"start": s.get("start", 0), "end": s.get("end", 0), "text": s.get("text", "").strip()}
+                    for s in segments
+                ],
+                "language": task.language or result.get("info", {}).get("language", ""),
+                "timestamp": task.created_at.isoformat() if task.created_at else None,
+            }
+            return ResponseModel(
+                code=TaskStatusHttpCode.completed.value,
+                router=str(request.url),
+                params=dict(request.query_params),
+                data=astra_data
+            )
         return ResponseModel(
             code=TaskStatusHttpCode.completed.value,
             router=str(request.url),

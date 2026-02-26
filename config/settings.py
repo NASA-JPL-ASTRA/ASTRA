@@ -55,8 +55,8 @@ class Settings:
         reload_on_file_change: bool = os.getenv("RELOAD_ON_FILE_CHANGE", False)
         # FastAPI 服务 IP | FastAPI service IP
         ip: str = "0.0.0.0"
-        # FastAPI 服务端口 | FastAPI service port
-        port: int = 80
+        # FastAPI 服务端口 | FastAPI service port (可通过 PORT 环境变量覆盖 | override via PORT env)
+        port: int = int(os.getenv("PORT", "80"))
 
     # 数据库设置 | Database settings
     class DatabaseSettings:
@@ -95,6 +95,8 @@ class Settings:
         # 检查任务状态的时间间隔（秒），如果设置过小可能会导致数据库查询频繁，设置过大可能会导致任务状态更新不及时。
         # Time interval for checking task status (seconds). If set too small, it may cause frequent database queries.
         TASK_STATUS_CHECK_INTERVAL: int = 3
+        # 是否过滤幻觉/噪音：过滤后 result.text 为空，不存入有效笔记 | Filter hallucinations/noise: when filtered, result.text is empty, no valid note stored
+        FILTER_HALLUCINATION: bool = os.getenv("FILTER_HALLUCINATION", "true").lower() in ("true", "1", "yes")
 
     # OpenAI Whisper 设置 | OpenAI Whisper settings
     class OpenAIWhisperSettings:

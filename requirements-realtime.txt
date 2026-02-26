@@ -1,0 +1,5 @@
+# Extra dependencies for realtime_demo.py
+# Install: pip install -r requirements-realtime.txt
+sounddevice>=0.4.6
+webrtcvad>=2.0.10
+numpy>=1.20.0
