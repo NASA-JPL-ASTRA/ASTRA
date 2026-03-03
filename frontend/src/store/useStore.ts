@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, LogEntry, TelemetryStream, SavedTranscription } from '../types';
+import type { Session, LogEntry, TelemetryStream, SavedTranscription, BackendNote } from '../types';
 import {
   sessions as mockSessions,
   logEntries as mockLogs,
@@ -37,6 +37,9 @@ interface AppState {
   // Live transcriptions from Whisper
   transcriptions: LiveTranscription[];
 
+  // Live notes from backend (during active session)
+  liveNotes: BackendNote[];
+
   // UI
   sidebarCollapsed: boolean;
   savedSessionToast: string | null;
@@ -55,6 +58,10 @@ interface AppState {
   addTranscription: (entry: LiveTranscription) => void;
   updateLiveTranscription: (id: string, newText: string) => void;
   clearTranscriptions: () => void;
+  addLiveNote: (note: BackendNote) => void;
+  updateLiveNote: (noteId: string, note: BackendNote) => void;
+  removeLiveNote: (noteId: string) => void;
+  clearLiveNotes: () => void;
   updateAudioLevel: (level: number) => void;
   setRecordingError: (error: string | null) => void;
   setSessionStartTime: (time: Date | null) => void;
@@ -83,6 +90,7 @@ export const useStore = create<AppState>((set, get) => ({
   wsConnected: false,
 
   transcriptions: [],
+  liveNotes: [],
 
   sidebarCollapsed: false,
   savedSessionToast: null,
@@ -111,6 +119,17 @@ export const useStore = create<AppState>((set, get) => ({
       ),
     })),
   clearTranscriptions: () => set({ transcriptions: [] }),
+  addLiveNote: (note) =>
+    set((s) => ({ liveNotes: [...s.liveNotes, note] })),
+  updateLiveNote: (noteId, note) =>
+    set((s) => ({
+      liveNotes: s.liveNotes.map((n) => (n.id === noteId ? note : n)),
+    })),
+  removeLiveNote: (noteId) =>
+    set((s) => ({
+      liveNotes: s.liveNotes.filter((n) => n.id !== noteId),
+    })),
+  clearLiveNotes: () => set({ liveNotes: [] }),
   updateAudioLevel: (level) => set({ audioLevel: level }),
   setRecordingError: (error) => set({ recordingError: error }),
   setSessionStartTime: (time) => set({ sessionStartTime: time }),

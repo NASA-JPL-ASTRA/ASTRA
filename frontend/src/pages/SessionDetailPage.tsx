@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -12,12 +12,20 @@ import {
   Pencil,
   Check,
   X,
-  AlertTriangle,
-  CheckCircle2,
-  Zap,
+  Plus,
+  Tag,
+  Loader2,
 } from 'lucide-react';
-import { useStore } from '../store/useStore';
-import type { SavedTranscription } from '../types';
+import {
+  getSession,
+  listNotes,
+  updateNote,
+  deleteNote,
+  createNote,
+  exportNotes,
+} from '../services/api';
+import type { BackendSession } from '../services/api';
+import type { BackendNote, NoteType } from '../types';
 
 const SPEAKER_COLORS = [
   { color: '#00d4ff', name: 'Speaker A', initials: 'SA' },
@@ -27,8 +35,14 @@ const SPEAKER_COLORS = [
   { color: '#ff5252', name: 'Speaker E', initials: 'SE' },
 ];
 
-function formatDate(date: Date): string {
-  return date.toLocaleDateString('en-US', {
+const NOTE_TYPE_STYLES: Record<NoteType, { label: string; bg: string; text: string; border: string }> = {
+  observation: { label: 'Observation', bg: 'bg-accent-cyan/10', text: 'text-accent-cyan', border: 'border-accent-cyan/20' },
+  command: { label: 'Command', bg: 'bg-accent-amber/10', text: 'text-accent-amber', border: 'border-accent-amber/20' },
+  system: { label: 'System', bg: 'bg-accent-purple/10', text: 'text-accent-purple', border: 'border-accent-purple/20' },
+};
+
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
@@ -38,9 +52,10 @@ function formatDate(date: Date): string {
   });
 }
 
-function formatDuration(start: Date, end?: Date): string {
-  const endTime = end || new Date();
-  const diffMs = endTime.getTime() - start.getTime();
+function formatDuration(startStr: string, endStr?: string | null): string {
+  const start = new Date(startStr);
+  const end = endStr ? new Date(endStr) : new Date();
+  const diffMs = end.getTime() - start.getTime();
   const hours = Math.floor(diffMs / 3600000);
   const minutes = Math.floor((diffMs % 3600000) / 60000);
   const seconds = Math.floor((diffMs % 60000) / 1000);
@@ -48,55 +63,22 @@ function formatDuration(start: Date, end?: Date): string {
   return `${minutes}m ${seconds}s`;
 }
 
-function formatElapsed(sessionStart: Date, entryTimestamp: string): string {
-  const offsetSec = Math.max(
-    0,
-    Math.floor((new Date(entryTimestamp).getTime() - sessionStart.getTime()) / 1000)
-  );
-  const m = Math.floor(offsetSec / 60);
-  const s = offsetSec % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+function formatTime(dateStr: string): string {
+  return new Date(dateStr).toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
-/* ─── Keyword extraction helpers ─── */
-
-function matchesIssue(text: string) {
-  return /anomal|issue|oscillat|drift|error|fault|grounding|noise|warning|problem/i.test(text);
-}
-function matchesConfirmation(text: string) {
-  return /confirm|complete|passed|nominal|stable|clean|improved|excellent|good|looking good/i.test(text);
-}
-function matchesAction(text: string) {
-  return /initiat|switch|begin|start|adjust|mark|log|running|proceed|setting|replacing|test/i.test(text);
-}
-
-/* ─── Speaker helper ─── */
-
-function getSpeakerInfo(speakerId: string, speakerMap: Map<string, number>) {
-  if (!speakerMap.has(speakerId)) {
-    speakerMap.set(speakerId, speakerMap.size);
+function getSpeakerInfo(speaker: string | null, speakerMap: Map<string, number>) {
+  const key = speaker || 'unknown';
+  if (!speakerMap.has(key)) {
+    speakerMap.set(key, speakerMap.size);
   }
-  const idx = speakerMap.get(speakerId)!;
-  return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
-}
-
-/* ─── Auto-generated summary text ─── */
-
-function generateAutoSummary(
-  transcriptions: SavedTranscription[],
-  uniqueSpeakerCount: number,
-  duration: string,
-  issueCount: number,
-  confirmCount: number
-): string {
-  let text = `Recording session with ${uniqueSpeakerCount} speaker${uniqueSpeakerCount !== 1 ? 's' : ''} and ${transcriptions.length} transcription entries over ${duration}.`;
-  if (issueCount > 0) {
-    text += ` ${issueCount} issue${issueCount !== 1 ? 's' : ''} / anomal${issueCount !== 1 ? 'ies' : 'y'} detected.`;
-  }
-  if (confirmCount > 0) {
-    text += ` ${confirmCount} confirmation${confirmCount !== 1 ? 's' : ''} recorded.`;
-  }
-  return text;
+  const idx = speakerMap.get(key)!;
+  const info = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+  return { ...info, name: speaker || 'Unknown' };
 }
 
 /* ─── Inline editable text component ─── */
@@ -191,55 +173,266 @@ function EditableText({
   );
 }
 
+/* ─── New note form ─── */
+
+function NewNoteForm({
+  sessionId,
+  onCreated,
+}: {
+  sessionId: string;
+  onCreated: (note: BackendNote) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [content, setContent] = useState('');
+  const [speaker, setSpeaker] = useState('');
+  const [type, setType] = useState<NoteType>('observation');
+  const [tagsInput, setTagsInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (open && ref.current) ref.current.focus();
+  }, [open]);
+
+  const reset = () => {
+    setContent('');
+    setSpeaker('');
+    setType('observation');
+    setTagsInput('');
+    setOpen(false);
+  };
+
+  const handleSubmit = async () => {
+    if (!content.trim()) return;
+    setSaving(true);
+    try {
+      const tags = tagsInput
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const note = await createNote(sessionId, {
+        timestamp: new Date().toISOString(),
+        content: content.trim(),
+        speaker: speaker.trim() || undefined,
+        type,
+        tags: tags.length > 0 ? tags : undefined,
+      });
+      onCreated(note);
+      reset();
+    } catch (err) {
+      console.error('Failed to create note:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-2 px-4 py-2.5 w-full rounded-xl border border-dashed border-space-border text-sm text-text-muted hover:border-accent-cyan/30 hover:text-accent-cyan transition-all"
+      >
+        <Plus className="w-4 h-4" />
+        Add a note manually
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-accent-cyan/20 bg-space-panel p-4 space-y-3">
+      <textarea
+        ref={ref}
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        placeholder="Note content..."
+        rows={3}
+        className="w-full text-sm text-text-primary bg-space-card border border-space-border rounded-lg px-3 py-2 focus:outline-none focus:border-accent-cyan/50 resize-none"
+      />
+      <div className="flex items-center gap-3 flex-wrap">
+        <input
+          value={speaker}
+          onChange={(e) => setSpeaker(e.target.value)}
+          placeholder="Speaker (optional)"
+          className="text-xs bg-space-card border border-space-border rounded-lg px-3 py-1.5 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-cyan/50 w-40"
+        />
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value as NoteType)}
+          className="text-xs bg-space-card border border-space-border rounded-lg px-3 py-1.5 text-text-primary focus:outline-none focus:border-accent-cyan/50"
+        >
+          <option value="observation">Observation</option>
+          <option value="command">Command</option>
+          <option value="system">System</option>
+        </select>
+        <input
+          value={tagsInput}
+          onChange={(e) => setTagsInput(e.target.value)}
+          placeholder="Tags (comma-separated)"
+          className="text-xs bg-space-card border border-space-border rounded-lg px-3 py-1.5 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-cyan/50 flex-1 min-w-[140px]"
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={saving || !content.trim()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/25 disabled:opacity-40 transition-all"
+        >
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+          Save Note
+        </button>
+        <button
+          onClick={reset}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium text-text-muted hover:text-text-primary transition-all"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main Page ─── */
+
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { sessions, deleteSession, updateSession, updateSessionTranscription } = useStore();
 
-  const session = sessions.find((s) => s.id === id);
+  const [session, setSession] = useState<BackendSession | null>(null);
+  const [notes, setNotes] = useState<BackendNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
 
-  // Editing state for name & description
-  const [editingName, setEditingName] = useState(false);
-  const [editingDesc, setEditingDesc] = useState(false);
-  const [nameValue, setNameValue] = useState('');
-  const [descValue, setDescValue] = useState('');
-
-  // Editing state for summary
-  const [editingSummary, setEditingSummary] = useState(false);
-  const [summaryValue, setSummaryValue] = useState('');
-
-  const nameInputRef = useRef<HTMLInputElement>(null);
-  const descInputRef = useRef<HTMLTextAreaElement>(null);
-  const summaryInputRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (editingName && nameInputRef.current) {
-      nameInputRef.current.focus();
-      nameInputRef.current.select();
-    }
-  }, [editingName]);
-
-  useEffect(() => {
-    if (editingDesc && descInputRef.current) {
-      descInputRef.current.focus();
-      descInputRef.current.select();
-    }
-  }, [editingDesc]);
-
-  useEffect(() => {
-    if (editingSummary && summaryInputRef.current) {
-      summaryInputRef.current.focus();
-    }
-  }, [editingSummary]);
-
-  // Stable speaker map
   const speakerMap = useMemo(() => new Map<string, number>(), []);
 
-  if (!session) {
+  // Fetch session + notes from backend
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    async function load() {
+      try {
+        setLoading(true);
+        setError(null);
+        const [sess, notesList] = await Promise.all([
+          getSession(id!),
+          listNotes(id!),
+        ]);
+        if (cancelled) return;
+        setSession(sess);
+        setNotes(notesList);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load session');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const handleEditNote = useCallback(
+    async (noteId: string, newContent: string) => {
+      if (!id) return;
+      try {
+        const updated = await updateNote(id, noteId, { content: newContent });
+        setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
+      } catch (err) {
+        console.error('Failed to update note:', err);
+      }
+    },
+    [id],
+  );
+
+  const handleDeleteNote = useCallback(
+    async (noteId: string) => {
+      if (!id) return;
+      if (deletingNoteId === noteId) {
+        try {
+          await deleteNote(id, noteId);
+          setNotes((prev) => prev.filter((n) => n.id !== noteId));
+        } catch (err) {
+          console.error('Failed to delete note:', err);
+        }
+        setDeletingNoteId(null);
+      } else {
+        setDeletingNoteId(noteId);
+        setTimeout(() => setDeletingNoteId(null), 3000);
+      }
+    },
+    [id, deletingNoteId],
+  );
+
+  const handleNoteCreated = useCallback((note: BackendNote) => {
+    setNotes((prev) => [...prev, note]);
+  }, []);
+
+  // Export via backend
+  const handleExportMarkdown = useCallback(async () => {
+    if (!id) return;
+    try {
+      const text = await exportNotes(id, 'markdown');
+      const blob = new Blob([text], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${session?.name || 'session'}-notes.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  }, [id, session?.name]);
+
+  const handleExportJSON = useCallback(async () => {
+    if (!id) return;
+    try {
+      const text = await exportNotes(id, 'json');
+      const blob = new Blob([text], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${session?.name || 'session'}-notes.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  }, [id, session?.name]);
+
+  // Pre-populate speaker map
+  notes.forEach((n) => getSpeakerInfo(n.speaker, speakerMap));
+  const uniqueSpeakers = [...new Set(notes.map((n) => n.speaker || 'unknown'))];
+
+  // Group by speaker
+  const speakerGroups = useMemo(() => {
+    const groups = new Map<string, BackendNote[]>();
+    for (const n of notes) {
+      const key = n.speaker || 'unknown';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(n);
+    }
+    return groups;
+  }, [notes]);
+
+  // ─── Loading / Error / Not Found ───
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[calc(100vh-3.5rem)] text-text-muted">
+        <Loader2 className="w-8 h-8 animate-spin mb-4 text-accent-cyan" />
+        <p className="text-sm">Loading session...</p>
+      </div>
+    );
+  }
+
+  if (error || !session) {
     return (
       <div className="flex flex-col items-center justify-center h-[calc(100vh-3.5rem)] text-text-muted">
         <MessageSquareText className="w-16 h-16 mb-4 opacity-20" />
-        <p className="text-base font-medium mb-2">Session not found</p>
+        <p className="text-base font-medium mb-2">{error || 'Session not found'}</p>
         <button
           onClick={() => navigate('/history')}
           className="flex items-center gap-2 text-sm text-accent-cyan hover:underline"
@@ -251,162 +444,7 @@ export default function SessionDetailPage() {
     );
   }
 
-  const transcriptions = session.transcriptions || [];
-
-  // Pre-populate speaker map
-  transcriptions.forEach((t) => getSpeakerInfo(t.speakerId, speakerMap));
-
-  const uniqueSpeakerIds = [...new Set(transcriptions.map((t) => t.speakerId))];
-
-  // Group by speaker
-  const speakerGroups = useMemo(() => {
-    const groups = new Map<string, SavedTranscription[]>();
-    for (const t of transcriptions) {
-      if (!groups.has(t.speakerId)) groups.set(t.speakerId, []);
-      groups.get(t.speakerId)!.push(t);
-    }
-    return groups;
-  }, [transcriptions]);
-
-  // Key observations
-  const issues = useMemo(
-    () => transcriptions.filter((t) => matchesIssue(t.rawText)),
-    [transcriptions]
-  );
-  const confirmations = useMemo(
-    () => transcriptions.filter((t) => matchesConfirmation(t.rawText)),
-    [transcriptions]
-  );
-  const actions = useMemo(
-    () => transcriptions.filter((t) => matchesAction(t.rawText)),
-    [transcriptions]
-  );
-
-  const durationStr = formatDuration(session.startTime, session.endTime);
-  const autoSummary = generateAutoSummary(
-    transcriptions,
-    uniqueSpeakerIds.length,
-    durationStr,
-    issues.length,
-    confirmations.length
-  );
-  const displaySummary = session.summary || autoSummary;
-
-  // ─── Editing handlers ───
-
-  const startEditName = () => {
-    setNameValue(session.name);
-    setEditingName(true);
-  };
-  const saveName = () => {
-    const trimmed = nameValue.trim();
-    if (trimmed && trimmed !== session.name) updateSession(session.id, { name: trimmed });
-    setEditingName(false);
-  };
-  const cancelEditName = () => setEditingName(false);
-
-  const startEditDesc = () => {
-    setDescValue(session.description);
-    setEditingDesc(true);
-  };
-  const saveDesc = () => {
-    const trimmed = descValue.trim();
-    if (trimmed !== session.description) updateSession(session.id, { description: trimmed });
-    setEditingDesc(false);
-  };
-  const cancelEditDesc = () => setEditingDesc(false);
-
-  const startEditSummary = () => {
-    setSummaryValue(displaySummary);
-    setEditingSummary(true);
-  };
-  const saveSummary = () => {
-    const trimmed = summaryValue.trim();
-    if (trimmed && trimmed !== displaySummary) updateSession(session.id, { summary: trimmed });
-    setEditingSummary(false);
-  };
-  const cancelEditSummary = () => setEditingSummary(false);
-
-  const handleSaveTranscription = (transcriptionId: string, newText: string) => {
-    updateSessionTranscription(session.id, transcriptionId, newText);
-  };
-
-  // ─── Export handlers ───
-
-  const handleExport = () => {
-    const lines: string[] = [];
-    lines.push(`# ${session.name}`);
-    lines.push(`# ${session.description}`);
-    lines.push(`# Start: ${session.startTime.toISOString()}`);
-    if (session.endTime) lines.push(`# End: ${session.endTime.toISOString()}`);
-    lines.push(`# Testbed: ${session.testbed}`);
-    lines.push(`# Entries: ${transcriptions.length}`);
-    lines.push('');
-    lines.push('## Summary');
-    lines.push(displaySummary);
-    lines.push('');
-
-    if (issues.length > 0) {
-      lines.push('## Issues & Anomalies');
-      for (const t of issues) {
-        const speaker = getSpeakerInfo(t.speakerId, speakerMap);
-        lines.push(`  - [${speaker.name}] ${t.rawText}`);
-      }
-      lines.push('');
-    }
-    if (confirmations.length > 0) {
-      lines.push('## Confirmations');
-      for (const t of confirmations) {
-        const speaker = getSpeakerInfo(t.speakerId, speakerMap);
-        lines.push(`  - [${speaker.name}] ${t.rawText}`);
-      }
-      lines.push('');
-    }
-
-    lines.push('## Full Transcript');
-    for (const t of transcriptions) {
-      const elapsed = formatElapsed(session.startTime, t.timestamp);
-      const speaker = getSpeakerInfo(t.speakerId, speakerMap);
-      lines.push(`[${elapsed}] ${speaker.name}: ${t.rawText}`);
-    }
-
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${session.name}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleExportJSON = () => {
-    const data = {
-      session: {
-        id: session.id,
-        name: session.name,
-        description: session.description,
-        summary: displaySummary,
-        startTime: session.startTime.toISOString(),
-        endTime: session.endTime?.toISOString(),
-        testbed: session.testbed,
-      },
-      transcriptions,
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${session.name}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDelete = () => {
-    if (window.confirm(`Delete "${session.name}"? This action cannot be undone.`)) {
-      deleteSession(session.id);
-      navigate('/history');
-    }
-  };
+  const durationStr = formatDuration(session.started_at, session.ended_at);
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -421,77 +459,22 @@ export default function SessionDetailPage() {
             Back to Structured Notes
           </button>
 
-          {/* Editable name */}
-          {editingName ? (
-            <div className="flex items-center gap-2 mb-1">
-              <input
-                ref={nameInputRef}
-                value={nameValue}
-                onChange={(e) => setNameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') saveName();
-                  if (e.key === 'Escape') cancelEditName();
-                }}
-                onBlur={saveName}
-                className="text-2xl font-bold font-mono text-text-primary bg-space-card border border-accent-cyan/30 rounded-lg px-3 py-1 focus:outline-none focus:border-accent-cyan/60 w-full max-w-lg"
-              />
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 group/name mb-1">
-              <h1 className="text-2xl font-bold font-mono text-text-primary">
-                {session.name}
-              </h1>
-              <button
-                onClick={startEditName}
-                className="p-1 rounded text-text-muted opacity-0 group-hover/name:opacity-100 hover:text-accent-cyan hover:bg-accent-cyan/10 transition-all"
-                title="Edit name"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
-          {/* Editable description */}
-          {editingDesc ? (
-            <div className="mt-1">
-              <textarea
-                ref={descInputRef}
-                value={descValue}
-                onChange={(e) => setDescValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    saveDesc();
-                  }
-                  if (e.key === 'Escape') cancelEditDesc();
-                }}
-                onBlur={saveDesc}
-                rows={2}
-                className="text-sm text-text-secondary bg-space-card border border-accent-cyan/30 rounded-lg px-3 py-2 focus:outline-none focus:border-accent-cyan/60 w-full max-w-lg resize-none"
-              />
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 group/desc mt-1">
-              <p className="text-sm text-text-secondary">{session.description}</p>
-              <button
-                onClick={startEditDesc}
-                className="p-1 rounded text-text-muted opacity-0 group-hover/desc:opacity-100 hover:text-accent-cyan hover:bg-accent-cyan/10 transition-all shrink-0"
-                title="Edit description"
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
-            </div>
+          <h1 className="text-2xl font-bold font-mono text-text-primary mb-1">
+            {session.name}
+          </h1>
+          {session.description && (
+            <p className="text-sm text-text-secondary">{session.description}</p>
           )}
         </div>
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={handleExport}
+            onClick={handleExportMarkdown}
             className="flex items-center gap-2 px-4 py-2 bg-space-card border border-space-border rounded-lg text-sm text-text-secondary hover:border-accent-cyan/30 hover:text-accent-cyan transition-all"
           >
             <Download className="w-4 h-4" />
-            TXT
+            MD
           </button>
           <button
             onClick={handleExportJSON}
@@ -500,12 +483,6 @@ export default function SessionDetailPage() {
             <Download className="w-4 h-4" />
             JSON
           </button>
-          <button
-            onClick={handleDelete}
-            className="flex items-center gap-2 px-4 py-2 bg-space-card border border-space-border rounded-lg text-sm text-text-secondary hover:border-accent-red/30 hover:text-accent-red transition-all"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
         </div>
       </div>
 
@@ -513,7 +490,7 @@ export default function SessionDetailPage() {
       <div className="flex items-center gap-6 text-xs text-text-muted">
         <div className="flex items-center gap-1.5">
           <Calendar className="w-3.5 h-3.5" />
-          {formatDate(session.startTime)}
+          {formatDate(session.started_at)}
         </div>
         <div className="flex items-center gap-1.5">
           <Clock className="w-3.5 h-3.5" />
@@ -521,231 +498,63 @@ export default function SessionDetailPage() {
         </div>
         <div className="flex items-center gap-1.5">
           <FileText className="w-3.5 h-3.5" />
-          {transcriptions.length} entries
+          {notes.length} note{notes.length !== 1 ? 's' : ''}
         </div>
         <div className="flex items-center gap-1.5">
           <Users className="w-3.5 h-3.5" />
-          {uniqueSpeakerIds.length} speaker{uniqueSpeakerIds.length !== 1 ? 's' : ''}
+          {uniqueSpeakers.length} speaker{uniqueSpeakers.length !== 1 ? 's' : ''}
         </div>
-        <span className="px-2 py-0.5 rounded bg-space-card border border-space-border">
-          {session.testbed}
+        <span
+          className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+            session.status === 'active'
+              ? 'bg-accent-green/10 text-accent-green border border-accent-green/20'
+              : 'bg-space-card border border-space-border'
+          }`}
+        >
+          {session.status}
         </span>
       </div>
 
       {/* ═══════════════ Two-column Layout ═══════════════ */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5 items-start">
-        {/* ─── Left: Structured Document ─── */}
+        {/* ─── Left: Notes List ─── */}
         <div className="space-y-5 min-w-0">
-          {/* Editable Summary Card */}
-          <div className="rounded-xl border border-space-border bg-space-panel p-5">
-            <h2 className="text-sm font-semibold text-text-primary mb-3 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-accent-cyan" />
-              Summary
-            </h2>
-            {editingSummary ? (
-              <div>
-                <textarea
-                  ref={summaryInputRef}
-                  value={summaryValue}
-                  onChange={(e) => setSummaryValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      saveSummary();
-                    }
-                    if (e.key === 'Escape') cancelEditSummary();
-                  }}
-                  onBlur={saveSummary}
-                  rows={4}
-                  className="w-full text-sm text-text-secondary leading-relaxed bg-space-card border border-accent-cyan/30 rounded-lg px-3 py-2 focus:outline-none focus:border-accent-cyan/60 resize-none"
-                />
-                <div className="flex items-center gap-2 mt-2">
-                  <button
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={saveSummary}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20 hover:bg-accent-cyan/20 transition-all"
-                  >
-                    <Check className="w-3 h-3" />
-                    Save
-                  </button>
-                  <button
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={cancelEditSummary}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium text-text-muted hover:text-text-primary transition-all"
-                  >
-                    <X className="w-3 h-3" />
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="group/summary">
-                <p
-                  onClick={startEditSummary}
-                  className="text-sm text-text-secondary leading-relaxed cursor-pointer rounded px-1 -mx-1 py-1 hover:bg-accent-cyan/5 transition-colors"
-                >
-                  {displaySummary}
-                  <Pencil className="w-3 h-3 text-text-muted opacity-0 group-hover/summary:opacity-60 inline ml-1.5 transition-opacity" />
-                </p>
-              </div>
-            )}
-          </div>
+          {/* Add note form */}
+          <NewNoteForm sessionId={session.id} onCreated={handleNoteCreated} />
 
-          {/* Key Observations (editable entries) */}
-          {(issues.length > 0 || confirmations.length > 0 || actions.length > 0) && (
-            <div className="rounded-xl border border-space-border bg-space-panel p-5">
-              <h2 className="text-sm font-semibold text-text-primary mb-4 flex items-center gap-2">
-                <Zap className="w-4 h-4 text-accent-cyan" />
-                Key Observations
-                <span className="text-[10px] text-text-muted font-normal ml-auto">
-                  Click text to edit
-                </span>
-              </h2>
-              <div className="space-y-4">
-                {/* Issues */}
-                {issues.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <AlertTriangle className="w-3.5 h-3.5 text-accent-amber" />
-                      <span className="text-xs font-semibold text-accent-amber">
-                        Issues & Anomalies ({issues.length})
-                      </span>
-                    </div>
-                    <div className="space-y-1.5 pl-5">
-                      {issues.map((t) => {
-                        const speaker = getSpeakerInfo(t.speakerId, speakerMap);
-                        return (
-                          <div
-                            key={`obs-issue-${t.id}`}
-                            className="text-xs text-text-secondary leading-relaxed flex gap-2"
-                          >
-                            <span
-                              className="font-semibold shrink-0"
-                              style={{ color: speaker.color }}
-                            >
-                              {speaker.name}:
-                            </span>
-                            <EditableText
-                              text={t.rawText}
-                              onSave={(newText) => handleSaveTranscription(t.id, newText)}
-                              className="text-xs text-text-secondary leading-relaxed"
-                              textareaClassName="w-full text-xs leading-relaxed text-text-primary bg-space-card border border-accent-cyan/30 rounded-lg px-2 py-1.5 focus:outline-none focus:border-accent-cyan/60 resize-none"
-                              rows={2}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Confirmations */}
-                {confirmations.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-accent-green" />
-                      <span className="text-xs font-semibold text-accent-green">
-                        Confirmations ({confirmations.length})
-                      </span>
-                    </div>
-                    <div className="space-y-1.5 pl-5">
-                      {confirmations.map((t) => {
-                        const speaker = getSpeakerInfo(t.speakerId, speakerMap);
-                        return (
-                          <div
-                            key={`obs-conf-${t.id}`}
-                            className="text-xs text-text-secondary leading-relaxed flex gap-2"
-                          >
-                            <span
-                              className="font-semibold shrink-0"
-                              style={{ color: speaker.color }}
-                            >
-                              {speaker.name}:
-                            </span>
-                            <EditableText
-                              text={t.rawText}
-                              onSave={(newText) => handleSaveTranscription(t.id, newText)}
-                              className="text-xs text-text-secondary leading-relaxed"
-                              textareaClassName="w-full text-xs leading-relaxed text-text-primary bg-space-card border border-accent-cyan/30 rounded-lg px-2 py-1.5 focus:outline-none focus:border-accent-cyan/60 resize-none"
-                              rows={2}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Actions */}
-                {actions.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap className="w-3.5 h-3.5 text-accent-cyan" />
-                      <span className="text-xs font-semibold text-accent-cyan">
-                        Actions & Commands ({actions.length})
-                      </span>
-                    </div>
-                    <div className="space-y-1.5 pl-5">
-                      {actions.map((t) => {
-                        const speaker = getSpeakerInfo(t.speakerId, speakerMap);
-                        return (
-                          <div
-                            key={`obs-act-${t.id}`}
-                            className="text-xs text-text-secondary leading-relaxed flex gap-2"
-                          >
-                            <span
-                              className="font-semibold shrink-0"
-                              style={{ color: speaker.color }}
-                            >
-                              {speaker.name}:
-                            </span>
-                            <EditableText
-                              text={t.rawText}
-                              onSave={(newText) => handleSaveTranscription(t.id, newText)}
-                              className="text-xs text-text-secondary leading-relaxed"
-                              textareaClassName="w-full text-xs leading-relaxed text-text-primary bg-space-card border border-accent-cyan/30 rounded-lg px-2 py-1.5 focus:outline-none focus:border-accent-cyan/60 resize-none"
-                              rows={2}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Full Transcript (editable entries) */}
+          {/* Notes */}
           <div className="rounded-xl border border-space-border bg-space-panel overflow-hidden">
             <div className="px-5 py-3 border-b border-space-border flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <MessageSquareText className="w-4 h-4 text-accent-cyan" />
-                <h2 className="text-sm font-semibold text-text-primary">Full Transcript</h2>
+                <h2 className="text-sm font-semibold text-text-primary">Notes</h2>
               </div>
               <span className="text-[10px] text-text-muted">Click text to edit</span>
             </div>
 
-            {transcriptions.length === 0 ? (
+            {notes.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-text-muted">
                 <FileText className="w-12 h-12 mb-3 opacity-20" />
-                <p className="text-sm font-medium">No transcription data</p>
+                <p className="text-sm font-medium">No notes yet</p>
+                <p className="text-xs mt-1">
+                  Notes will appear here as the AI model processes audio, or add one manually above.
+                </p>
               </div>
             ) : (
               <div className="divide-y divide-space-border">
-                {transcriptions.map((entry) => {
-                  const speaker = getSpeakerInfo(entry.speakerId, speakerMap);
-                  const elapsed = formatElapsed(session.startTime, entry.timestamp);
+                {notes.map((note) => {
+                  const speaker = getSpeakerInfo(note.speaker, speakerMap);
+                  const typeStyle = NOTE_TYPE_STYLES[note.type] || NOTE_TYPE_STYLES.observation;
 
                   return (
                     <div
-                      key={entry.id}
-                      className="px-5 py-3.5 hover:bg-space-card/30 transition-colors"
+                      key={note.id}
+                      className="px-5 py-3.5 hover:bg-space-card/30 transition-colors group"
                     >
                       <div className="flex items-start gap-3">
-                        {/* Elapsed time */}
+                        {/* Timestamp */}
                         <span className="text-[11px] text-text-muted font-mono bg-space-card px-1.5 py-0.5 rounded shrink-0 mt-0.5">
-                          {elapsed}
+                          {formatTime(note.timestamp)}
                         </span>
 
                         {/* Speaker */}
@@ -756,30 +565,49 @@ export default function SessionDetailPage() {
                           {speaker.name}
                         </span>
 
-                        {/* Editable text */}
+                        {/* Content */}
                         <div className="flex-1 min-w-0">
                           <EditableText
-                            text={entry.rawText}
-                            onSave={(newText) => handleSaveTranscription(entry.id, newText)}
+                            text={note.content}
+                            onSave={(newText) => handleEditNote(note.id, newText)}
                             className="text-sm text-text-primary leading-relaxed"
                           />
+
+                          {/* Tags + Type badge */}
+                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                            <span
+                              className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${typeStyle.bg} ${typeStyle.text} ${typeStyle.border}`}
+                            >
+                              {typeStyle.label}
+                            </span>
+                            {note.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="text-[10px] text-text-muted px-1.5 py-0.5 rounded bg-space-card border border-space-border flex items-center gap-1"
+                              >
+                                <Tag className="w-2.5 h-2.5" />
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
                         </div>
 
-                        {/* Confidence */}
-                        <div className="flex items-center gap-1 shrink-0 mt-0.5">
-                          <div
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              entry.confidence > 0.9
-                                ? 'bg-accent-green'
-                                : entry.confidence > 0.8
-                                  ? 'bg-accent-amber'
-                                  : 'bg-accent-red'
-                            }`}
-                          />
-                          <span className="text-[10px] text-text-muted font-mono">
-                            {(entry.confidence * 100).toFixed(0)}%
-                          </span>
-                        </div>
+                        {/* Delete button */}
+                        <button
+                          onClick={() => handleDeleteNote(note.id)}
+                          className={`p-1.5 rounded-lg shrink-0 opacity-0 group-hover:opacity-100 transition-all ${
+                            deletingNoteId === note.id
+                              ? 'text-accent-red bg-accent-red/15 opacity-100'
+                              : 'text-text-muted hover:text-accent-red hover:bg-accent-red/10'
+                          }`}
+                          title={
+                            deletingNoteId === note.id
+                              ? 'Click again to confirm'
+                              : 'Delete note'
+                          }
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   );
@@ -789,7 +617,7 @@ export default function SessionDetailPage() {
           </div>
         </div>
 
-        {/* ─── Right: Speaker Sidebar (editable entries) ─── */}
+        {/* ─── Right: Speaker Sidebar ─── */}
         <div className="space-y-4 lg:sticky lg:top-4">
           <div className="rounded-xl border border-space-border bg-space-panel p-4">
             <h2 className="text-sm font-semibold text-text-primary mb-3 flex items-center gap-2">
@@ -797,67 +625,61 @@ export default function SessionDetailPage() {
               Speakers
             </h2>
 
-            <div className="space-y-4">
-              {uniqueSpeakerIds.map((speakerId) => {
-                const speaker = getSpeakerInfo(speakerId, speakerMap);
-                const entries = speakerGroups.get(speakerId) || [];
+            {uniqueSpeakers.length === 0 ? (
+              <p className="text-xs text-text-muted">No speakers yet</p>
+            ) : (
+              <div className="space-y-4">
+                {uniqueSpeakers.map((spkKey) => {
+                  const speaker = getSpeakerInfo(spkKey, speakerMap);
+                  const entries = speakerGroups.get(spkKey) || [];
 
-                return (
-                  <div key={speakerId}>
-                    {/* Speaker header */}
-                    <div className="flex items-center gap-2.5 mb-2">
-                      <div
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-                        style={{
-                          backgroundColor: speaker.color + '18',
-                          color: speaker.color,
-                          border: `1.5px solid ${speaker.color}30`,
-                        }}
-                      >
-                        {speaker.initials}
+                  return (
+                    <div key={spkKey}>
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div
+                          className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                          style={{
+                            backgroundColor: speaker.color + '18',
+                            color: speaker.color,
+                            border: `1.5px solid ${speaker.color}30`,
+                          }}
+                        >
+                          {speaker.initials}
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-xs font-semibold" style={{ color: speaker.color }}>
+                            {speaker.name}
+                          </span>
+                          <span className="text-[10px] text-text-muted ml-2">
+                            {entries.length} note{entries.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <span className="text-xs font-semibold" style={{ color: speaker.color }}>
-                          {speaker.name}
-                        </span>
-                        <span className="text-[10px] text-text-muted ml-2">
-                          {entries.length} entr{entries.length !== 1 ? 'ies' : 'y'}
-                        </span>
-                      </div>
-                    </div>
 
-                    {/* Speaker's entries (editable) */}
-                    <div className="space-y-1.5 pl-9">
-                      {entries.map((entry) => {
-                        const elapsed = formatElapsed(session.startTime, entry.timestamp);
-                        return (
+                      <div className="space-y-1.5 pl-9">
+                        {entries.map((entry) => (
                           <div
                             key={`sidebar-${entry.id}`}
                             className="text-xs text-text-secondary leading-relaxed"
                           >
                             <span className="text-[10px] text-text-muted font-mono mr-1.5">
-                              {elapsed}
+                              {formatTime(entry.timestamp)}
                             </span>
-                            <EditableText
-                              text={entry.rawText}
-                              onSave={(newText) => handleSaveTranscription(entry.id, newText)}
-                              className="text-xs text-text-secondary leading-relaxed"
-                              textareaClassName="w-full text-xs leading-relaxed text-text-primary bg-space-card border border-accent-cyan/30 rounded-lg px-2 py-1.5 focus:outline-none focus:border-accent-cyan/60 resize-none"
-                              rows={2}
-                            />
+                            {entry.content.length > 80
+                              ? entry.content.slice(0, 80) + '...'
+                              : entry.content}
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
 
-                    {/* Separator */}
-                    {speakerId !== uniqueSpeakerIds[uniqueSpeakerIds.length - 1] && (
-                      <div className="border-b border-space-border mt-3" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      {spkKey !== uniqueSpeakers[uniqueSpeakers.length - 1] && (
+                        <div className="border-b border-space-border mt-3" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

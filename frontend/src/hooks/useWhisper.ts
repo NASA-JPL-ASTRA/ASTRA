@@ -2,6 +2,7 @@ import { useCallback, useRef, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { createSession, endSession } from '../services/api';
 import { connectSessionWs, type SessionWsConnection } from '../services/sessionWs';
+import type { BackendNote } from '../types';
 
 const CHUNK_INTERVAL_MS = 3000;
 const TARGET_SAMPLE_RATE = 16000;
@@ -59,6 +60,10 @@ export function useWhisper() {
     setRecordingError,
     setSessionStartTime,
     saveSessionToHistory,
+    addLiveNote,
+    updateLiveNote,
+    removeLiveNote,
+    clearLiveNotes,
   } = useStore();
 
   // ── Audio capture refs ──
@@ -77,9 +82,15 @@ export function useWhisper() {
   const isActiveRef = useRef(false);
 
   const addTranscriptionRef = useRef(addTranscription);
+  const addLiveNoteRef = useRef(addLiveNote);
+  const updateLiveNoteRef = useRef(updateLiveNote);
+  const removeLiveNoteRef = useRef(removeLiveNote);
   useEffect(() => {
     addTranscriptionRef.current = addTranscription;
-  }, [addTranscription]);
+    addLiveNoteRef.current = addLiveNote;
+    updateLiveNoteRef.current = updateLiveNote;
+    removeLiveNoteRef.current = removeLiveNote;
+  }, [addTranscription, addLiveNote, updateLiveNote, removeLiveNote]);
 
   // ── Audio level monitoring (real mic via AnalyserNode) ──
 
@@ -232,8 +243,9 @@ export function useWhisper() {
         onClose: () => setWsConnected(false),
         onError: () => setWsConnected(false),
         onMessage: (msg) => {
+          const data = msg.data as Record<string, unknown>;
+
           if (msg.event === 'stt.task.done') {
-            const data = msg.data as Record<string, unknown>;
             if (typeof data.transcript === 'string' && data.transcript) {
               addTranscriptionRef.current({
                 id: String(data.id ?? `tr_${Date.now()}`),
@@ -243,6 +255,15 @@ export function useWhisper() {
                 confidence: 0.9,
                 isFinal: true,
               });
+            }
+          } else if (msg.event === 'note.created') {
+            addLiveNoteRef.current(data as unknown as BackendNote);
+          } else if (msg.event === 'note.updated') {
+            const note = data as unknown as BackendNote;
+            updateLiveNoteRef.current(note.id, note);
+          } else if (msg.event === 'note.deleted') {
+            if (typeof data.id === 'string') {
+              removeLiveNoteRef.current(data.id);
             }
           }
         },
@@ -333,6 +354,7 @@ export function useWhisper() {
     setWsConnected(false);
 
     saveSessionToHistory();
+    clearLiveNotes();
     setSessionStartTime(null);
   }, [
     backendSessionId,
@@ -342,6 +364,7 @@ export function useWhisper() {
     setIsPaused,
     setWsConnected,
     saveSessionToHistory,
+    clearLiveNotes,
     setSessionStartTime,
     teardownAudio,
     flushChunk,

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   Radio,
   MessageSquareText,
@@ -5,12 +6,15 @@ import {
   Clock,
   Calendar,
   ChevronRight,
+  Loader2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../store/useStore';
+import { listSessions } from '../services/api';
+import type { BackendSession } from '../services/api';
 
-function formatDate(date: Date): string {
-  return date.toLocaleDateString('en-US', {
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -18,9 +22,10 @@ function formatDate(date: Date): string {
   });
 }
 
-function formatDuration(start: Date, end?: Date): string {
-  const endTime = end || new Date();
-  const diffMs = endTime.getTime() - start.getTime();
+function formatDuration(startStr: string, endStr?: string | null): string {
+  const start = new Date(startStr);
+  const end = endStr ? new Date(endStr) : new Date();
+  const diffMs = end.getTime() - start.getTime();
   const hours = Math.floor(diffMs / 3600000);
   const minutes = Math.floor((diffMs % 3600000) / 60000);
   if (hours > 0) return `${hours}h ${minutes}m`;
@@ -28,13 +33,27 @@ function formatDuration(start: Date, end?: Date): string {
 }
 
 export default function Dashboard() {
-  const { sessions, isRecording } = useStore();
+  const { isRecording } = useStore();
+  const [sessions, setSessions] = useState<BackendSession[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const completedSessions = sessions.filter((s) => s.status === 'completed');
-  const totalEntries = completedSessions.reduce(
-    (acc, s) => acc + (s.transcriptions?.length || s.logCount),
-    0
-  );
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await listSessions();
+        if (!cancelled) setSessions(data);
+      } catch {
+        // Silently fail — dashboard still usable
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const endedSessions = sessions.filter((s) => s.status === 'ended');
 
   return (
     <div className="p-6 space-y-8 animate-fade-in">
@@ -60,14 +79,16 @@ export default function Dashboard() {
         <div className="rounded-xl border border-accent-cyan/20 bg-accent-cyan/5 p-5">
           <MessageSquareText className="w-5 h-5 text-accent-cyan mb-3" />
           <p className="text-2xl font-bold text-accent-cyan font-mono">
-            {completedSessions.length}
+            {loading ? '—' : endedSessions.length}
           </p>
           <p className="text-xs text-text-muted mt-1">Saved Notes</p>
         </div>
         <div className="rounded-xl border border-accent-green/20 bg-accent-green/5 p-5">
           <FileText className="w-5 h-5 text-accent-green mb-3" />
-          <p className="text-2xl font-bold text-accent-green font-mono">{totalEntries}</p>
-          <p className="text-xs text-text-muted mt-1">Total Entries</p>
+          <p className="text-2xl font-bold text-accent-green font-mono">
+            {loading ? '—' : sessions.length}
+          </p>
+          <p className="text-xs text-text-muted mt-1">Total Sessions</p>
         </div>
         <div className="rounded-xl border border-space-border bg-space-panel p-5">
           <Radio
@@ -82,11 +103,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Recent Notes */}
+      {/* Recent Sessions */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-text-primary">Recent Notes</h2>
-          {completedSessions.length > 0 && (
+          <h2 className="text-lg font-semibold text-text-primary">Recent Sessions</h2>
+          {sessions.length > 0 && (
             <Link
               to="/history"
               className="text-xs text-accent-cyan hover:underline flex items-center gap-1"
@@ -96,17 +117,22 @@ export default function Dashboard() {
           )}
         </div>
 
-        {completedSessions.length === 0 ? (
+        {loading ? (
+          <div className="rounded-xl border border-space-border bg-space-panel p-8 flex items-center justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-accent-cyan mr-2" />
+            <span className="text-sm text-text-muted">Loading sessions...</span>
+          </div>
+        ) : sessions.length === 0 ? (
           <div className="rounded-xl border border-space-border bg-space-panel p-8 text-center">
             <MessageSquareText className="w-12 h-12 mx-auto mb-3 text-text-muted opacity-20" />
-            <p className="text-sm text-text-muted">No notes yet</p>
+            <p className="text-sm text-text-muted">No sessions yet</p>
             <p className="text-xs text-text-muted mt-1">
               Start a recording session — notes are auto-saved when you stop
             </p>
           </div>
         ) : (
           <div className="space-y-2">
-            {completedSessions.slice(0, 5).map((session) => (
+            {sessions.slice(0, 5).map((session) => (
               <Link
                 key={session.id}
                 to={`/history/${session.id}`}
@@ -121,21 +147,27 @@ export default function Dashboard() {
                       {session.name}
                     </h3>
                     <p className="text-xs text-text-muted truncate">
-                      {session.description}
+                      {session.description || 'No description'}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-text-muted shrink-0 ml-4">
                   <div className="flex items-center gap-1.5">
                     <Calendar className="w-3 h-3" />
-                    {formatDate(session.startTime)}
+                    {formatDate(session.started_at)}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Clock className="w-3 h-3" />
-                    {formatDuration(session.startTime, session.endTime)}
+                    {formatDuration(session.started_at, session.ended_at)}
                   </div>
-                  <span className="font-mono">
-                    {session.transcriptions?.length || session.logCount} entries
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                      session.status === 'active'
+                        ? 'bg-accent-green/10 text-accent-green'
+                        : 'bg-space-card text-text-muted'
+                    }`}
+                  >
+                    {session.status}
                   </span>
                   <ChevronRight className="w-4 h-4 text-text-muted group-hover:text-accent-cyan" />
                 </div>

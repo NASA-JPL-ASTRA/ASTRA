@@ -79,6 +79,21 @@ export interface Session {
   transcriptions?: SavedTranscription[];
 }
 
+export type NoteType = 'observation' | 'command' | 'system';
+
+export interface BackendNote {
+  id: string;
+  session_id: string;
+  timestamp: string;
+  speaker: string | null;
+  content: string;
+  type: NoteType;
+  tags: string[];
+  telemetry_snapshot: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Document {
   id: string;
   name: string;
