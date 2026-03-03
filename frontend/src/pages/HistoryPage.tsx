@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Calendar,
@@ -11,8 +11,6 @@ import {
   ChevronRight,
   MessageSquareText,
 } from 'lucide-react';
-import { useStore } from '../store/useStore';
-import { APP_MODE } from '../config/env';
 import { listSessions } from '../services/api';
 import type { Session } from '../types';
 
@@ -35,7 +33,7 @@ function formatDuration(start: Date, end?: Date): string {
   return `${minutes}m`;
 }
 
-function exportSession(session: ReturnType<typeof useStore.getState>['sessions'][0]) {
+function exportSession(session: Session) {
   const lines: string[] = [];
   lines.push(`# ${session.name}`);
   lines.push(`# ${session.description}`);
@@ -71,17 +69,15 @@ function exportSession(session: ReturnType<typeof useStore.getState>['sessions']
 }
 
 export default function HistoryPage() {
-  const { sessions, deleteSession } = useStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [liveSessions, setLiveSessions] = useState<Session[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadLiveSessions() {
-      if (APP_MODE !== 'live') return;
+    async function loadSessions() {
       try {
         setLoadError(null);
         const apiSessions = await listSessions();
@@ -101,7 +97,7 @@ export default function HistoryPage() {
           transcriptions: [],
         }));
 
-        setLiveSessions(mapped);
+        setSessions(mapped);
       } catch (error) {
         if (cancelled) return;
         const message =
@@ -110,33 +106,23 @@ export default function HistoryPage() {
       }
     }
 
-    loadLiveSessions();
+    loadSessions();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const sourceSessions = useMemo(
-    () => (APP_MODE === 'live' ? liveSessions : sessions),
-    [liveSessions, sessions]
-  );
-
-  const filteredSessions = sourceSessions.filter(
+  const filteredSessions = sessions.filter(
     (s) =>
-      (APP_MODE !== 'live' ? s.status === 'completed' : true) &&
-      (searchQuery === '' ||
-        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.testbed.toLowerCase().includes(searchQuery.toLowerCase()))
+      searchQuery === '' ||
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.testbed.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const handleDelete = (id: string) => {
     if (deletingId === id) {
-      if (APP_MODE === 'live') {
-        setLiveSessions((prev) => prev.filter((sess) => sess.id !== id));
-      } else {
-        deleteSession(id);
-      }
+      setSessions((prev) => prev.filter((sess) => sess.id !== id));
       setDeletingId(null);
     } else {
       setDeletingId(id);
