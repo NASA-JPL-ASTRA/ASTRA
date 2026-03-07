@@ -145,12 +145,12 @@ class Task(TaskBase):
     def to_dict(self):
         return {
             'id': self.id,
-            'status': self.status.value,
+            'status': self.status.value if hasattr(self.status, 'value') else self.status,
             'callback_url': self.callback_url,
             'callback_status_code': self.callback_status_code,
             'callback_message': self.callback_message,
             'callback_time': self.callback_time.isoformat() if self.callback_time else None,
-            'priority': self.priority.value,
+            'priority': self.priority.value if hasattr(self.priority, 'value') else self.priority,
             'engine_name': self.engine_name,
             'task_type': self.task_type,
             'created_at': self.created_at.isoformat() if self.created_at else None,

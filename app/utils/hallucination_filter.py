@@ -18,10 +18,10 @@ HALLUCINATION_PHRASES_SHORT = frozenset({
 })
 
 
-def is_likely_hallucination(transcript: str, segments: list, debug: bool = False) -> bool:
+def is_likely_hallucination(transcript: str, segments: list, debug: bool = False) -> tuple[bool, str | None]:
     """
     Filter hallucinations using: (1) model confidence, (2) short-transcript phrase fallback.
-    Returns True if the result should be treated as noise/hallucination (not stored as note).
+    Returns (True, reason) if filtered, (False, None) otherwise.
     """
     # 1. Confidence-based
     for i, seg in enumerate(segments or []):
@@ -30,13 +30,15 @@ def is_likely_hallucination(transcript: str, segments: list, debug: bool = False
         if debug and (no_speech is not None or avg_logprob is not None):
             print(f"    [debug] seg[{i}] no_speech_prob={no_speech}, avg_logprob={avg_logprob}")
         if no_speech is not None and no_speech > NO_SPEECH_THRESHOLD:
+            reason = f"no_speech_prob {no_speech:.4f} > {NO_SPEECH_THRESHOLD}"
             if debug:
-                print(f"    [debug] filtered: no_speech_prob {no_speech} > {NO_SPEECH_THRESHOLD}")
-            return True
+                print(f"    [debug] filtered: {reason}")
+            return True, reason
         if avg_logprob is not None and avg_logprob < LOGPROB_THRESHOLD:
+            reason = f"avg_logprob {avg_logprob:.4f} < {LOGPROB_THRESHOLD}"
             if debug:
-                print(f"    [debug] filtered: avg_logprob {avg_logprob} < {LOGPROB_THRESHOLD}")
-            return True
+                print(f"    [debug] filtered: {reason}")
+            return True, reason
 
     if debug and segments and not any(seg.get("no_speech_prob") is not None or seg.get("avg_logprob") is not None for seg in segments):
         print("    [debug] segments have no no_speech_prob/avg_logprob (using phrase fallback only)")
@@ -44,8 +46,9 @@ def is_likely_hallucination(transcript: str, segments: list, debug: bool = False
     # 2. Fallback: very short transcript matching known hallucination phrases
     t = transcript.strip().lower().rstrip(".,!? ")
     if len(t) <= SHORT_TRANSCRIPT_MAX_LEN and t in HALLUCINATION_PHRASES_SHORT:
+        reason = f"phrase fallback: '{t}'"
         if debug:
-            print(f"    [debug] filtered: short transcript '{t}' in phrase list")
-        return True
+            print(f"    [debug] filtered: {reason}")
+        return True, reason
 
-    return False
+    return False, None

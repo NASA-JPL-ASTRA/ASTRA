@@ -33,12 +33,12 @@ import traceback
 from typing import Union, Optional
 from urllib.parse import urlparse
 
-from fastapi import Request, APIRouter, UploadFile, File, HTTPException, Form, BackgroundTasks, Query, status, Body
+from fastapi import Request, APIRouter, UploadFile, File, HTTPException, Form, BackgroundTasks, Query, status, Body, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.models.APIResponseModel import ResponseModel, ErrorResponseModel
-from app.api.models.WhisperTaskRequest import WhisperTaskFileOption
+from app.api.models.WhisperTaskRequest import WhisperTaskFileOption, WhisperTaskQueryOption
 from app.database.models.TaskModels import (
     TaskStatus,
     TaskStatusHttpCode,
@@ -51,6 +51,30 @@ router = APIRouter()
 
 # 配置日志记录器
 logger = configure_logging(name=__name__)
+
+
+def get_task_data_from_query(request: Request) -> WhisperTaskQueryOption:
+    """Parse task params from query string (for programmatic API calls)."""
+    q = request.query_params
+    return WhisperTaskQueryOption(
+        task_type=q.get("task_type", "transcribe"),
+        callback_url=q.get("callback_url") or "",
+        priority=q.get("priority", "normal"),
+        platform=q.get("platform") or "",
+        language=q.get("language", ""),
+        temperature=q.get("temperature", "0.8,1.0"),
+        compression_ratio_threshold=float(q.get("compression_ratio_threshold", "1.8")),
+        no_speech_threshold=float(q.get("no_speech_threshold", "0.6")),
+        condition_on_previous_text=q.get("condition_on_previous_text", "true").lower() in ("true", "1", "yes"),
+        initial_prompt=q.get("initial_prompt", ""),
+        word_timestamps=q.get("word_timestamps", "false").lower() in ("true", "1", "yes"),
+        prepend_punctuations=q.get("prepend_punctuations", "\"'\"¿([{-"),
+        append_punctuations=q.get("append_punctuations", "\"'.。,，!！?？:：\")]}、"),
+        clip_timestamps=q.get("clip_timestamps", "0.0"),
+        vad_filter=q.get("vad_filter", "true").lower() in ("true", "1", "yes"),
+        hallucination_silence_threshold=float(q["hallucination_silence_threshold"]) if q.get("hallucination_silence_threshold") else None,
+        file_url=q.get("file_url") or "",
+    )
 
 
 # 创建任务 | Create task
@@ -66,7 +90,7 @@ async def task_create(
             None,
             description="媒体文件（支持的格式：音频和视频，如 MP3, WAV, MP4, MKV 等） / Media file (supported formats: audio and video, e.g., MP3, WAV, MP4, MKV)"
         ),
-        task_data: WhisperTaskFileOption = Query()
+        task_data: WhisperTaskQueryOption = Depends(get_task_data_from_query),
 ) -> ResponseModel:
     """
     # [中文]
@@ -225,6 +249,7 @@ async def task_create(
             "prepend_punctuations": task_data.prepend_punctuations,
             "append_punctuations": task_data.append_punctuations,
             "clip_timestamps": [float(clip) for clip in task_data.clip_timestamps.split(",")] if "," in task_data.clip_timestamps else task_data.clip_timestamps,
+            "vad_filter": getattr(task_data, "vad_filter", True),
             "hallucination_silence_threshold": task_data.hallucination_silence_threshold
         }
         task_info = await request.app.state.whisper_service.create_whisper_task(

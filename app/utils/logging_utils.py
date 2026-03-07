@@ -30,11 +30,16 @@
 # ==============================================================================
 
 import logging
+import logging.handlers
 import os
 import sys
-from concurrent_log_handler import ConcurrentRotatingFileHandler
-from config.settings import Settings
 from typing import Optional
+
+try:
+    from concurrent_log_handler import ConcurrentRotatingFileHandler as RotatingFileHandler
+except ImportError:
+    RotatingFileHandler = logging.handlers.RotatingFileHandler  # type: ignore
+from config.settings import Settings
 
 
 def configure_logging(
@@ -76,7 +81,7 @@ def configure_logging(
         if log_file_prefix:
             log_file_name = f"{log_file_prefix}.log"
             log_file_path = os.path.join(log_dir, log_file_name)
-            rotating_file_handler = ConcurrentRotatingFileHandler(
+            rotating_file_handler = RotatingFileHandler(
                 filename=log_file_path,
                 # 设置最大文件大小为 10 MB | Set max file size to 10 MB
                 maxBytes=10*1024*1024,

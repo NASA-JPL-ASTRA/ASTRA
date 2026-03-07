@@ -35,9 +35,8 @@
 1. `realtime_demo.py` 持续录音，VAD 检测语音/静音
 2. 静音达到阈值（默认 1.5s）→ 将当前音频保存为 WAV
 3. POST 到 Whisper API → 轮询结果
-4. 客户端 + 服务端双重幻觉过滤
-5. 有效转录存入数据库（`created_at` 为时间戳）
-6. `export_notes.py` 按时间/日期导出为 Markdown 或 TXT
+4. 幻觉过滤（置信度）→ 有效转录存入数据库
+5. `export_notes.py` 按时间/日期导出为 Markdown 或 TXT
 
 ---
 
@@ -67,7 +66,15 @@ pip install -r requirements.txt
 pip install -r requirements-realtime.txt
 ```
 
-### 2. 启动 Whisper API
+### 2. 启动服务
+
+**一键启动**（Whisper + Backend）：
+
+```bash
+./scripts/start_astra.sh
+```
+
+**或手动启动** Whisper API：
 
 ```bash
 python start.py
@@ -76,8 +83,17 @@ python start.py
 
 ### 3. 运行实时 Demo
 
+**集成模式**（配合 ASTRA Backend + Frontend，Notes 同步）：
+
 ```bash
-python realtime_demo.py --api-url http://127.0.0.1:8000
+# 先启动 Backend (8000) 和 Whisper API (8001)
+python realtime_demo.py --backend-url http://127.0.0.1:8000
+```
+
+**Standalone 模式**（仅 Whisper API，终端打印）：
+
+```bash
+python realtime_demo.py --api-url http://127.0.0.1:8001
 ```
 
 可选参数：`--silence-sec`、`--min-speech-sec`、`--debug`

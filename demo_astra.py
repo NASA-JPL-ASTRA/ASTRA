@@ -34,7 +34,7 @@ async def create_task(api_url: str, file_path: Path, session_id: str) -> dict:
     # Set content-type based on file extension
     suffix = file_path.suffix.lower()
     content_type = "audio/wav" if suffix == ".wav" else "audio/mpeg" if suffix == ".mp3" else "video/mp4"
-    params = {"task_type": "transcribe", "priority": "high", "platform": session_id}
+    params = {"task_type": "transcribe", "priority": "high", "platform": session_id, "language": "en"}
     with open(file_path, "rb") as f:
         files = {"file_upload": (file_path.name, f, content_type)}
         async with httpx.AsyncClient(timeout=60.0) as client:

@@ -40,8 +40,8 @@ from asyncio import Queue
 from typing import Optional
 from app.utils.logging_utils import configure_logging
 
-# OpenAI Whisper 模型 | OpenAI Whisper model
-import whisper
+# OpenAI Whisper 模型（按需导入，仅在使用 openai_whisper 引擎时）
+# OpenAI Whisper model (lazy import, only when using openai_whisper engine)
 
 # Faster-Whisper 模型 | Faster-Whisper model
 from faster_whisper import WhisperModel
@@ -340,6 +340,7 @@ class AsyncModelPool:
                 )
                 end_time = datetime.datetime.now()
             elif self.engine == "openai_whisper":
+                import whisper  # 按需导入，使用 openai_whisper 引擎时才需要
                 start_time = datetime.datetime.now()
                 model = await asyncio.to_thread(
                     whisper.load_model,

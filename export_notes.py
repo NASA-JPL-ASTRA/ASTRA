@@ -7,10 +7,12 @@ Skips filtered (noise/hallucination) entries - only exports tasks with non-empty
 
 Usage:
   python export_notes.py [--db PATH] [--output FILE] [--format md|txt] [--by-segment]
+  python export_notes.py --task-id 123 -o task_123.md   # 导出指定任务的 note
   python export_notes.py --date 2024-02-18 -o notes_20240218.md   # 导出某一天的笔记
   python export_notes.py --from 2024-02-18 --to 2024-02-20 -o notes_range.md  # 导出日期范围
 
-Time filter:
+Filter:
+  - --task-id ID: export only note(s) for this task (按一次任务)
   - --date YYYY-MM-DD: export only notes from that day
   - --from YYYY-MM-DD: start date (inclusive)
   - --to YYYY-MM-DD: end date (inclusive)
@@ -26,12 +28,13 @@ from pathlib import Path
 def load_notes(
     db_path: str,
     by_segment: bool = False,
+    task_id: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> list[dict]:
     """
     Load completed tasks with non-empty transcript from SQLite.
-    date_from/date_to: YYYY-MM-DD, filter by created_at date.
+    task_id: filter by single task; date_from/date_to: YYYY-MM-DD, filter by created_at date.
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -39,6 +42,9 @@ def load_notes(
 
     sql = "SELECT id, created_at, updated_at, result FROM tasks WHERE status = 'completed' AND result IS NOT NULL"
     params: list = []
+    if task_id is not None:
+        sql += " AND id = ?"
+        params.append(task_id)
     if date_from:
         sql += " AND date(created_at) >= date(?)"
         params.append(date_from)
@@ -133,6 +139,10 @@ def main():
         "--to", dest="date_to", metavar="YYYY-MM-DD",
         help="End date (inclusive)"
     )
+    parser.add_argument(
+        "--task-id", type=int,
+        help="Export only this task's note (按一次任务)"
+    )
     args = parser.parse_args()
 
     date_from = args.date_from
@@ -148,6 +158,7 @@ def main():
     notes = load_notes(
         str(db_path),
         by_segment=args.by_segment,
+        task_id=args.task_id,
         date_from=date_from,
         date_to=date_to,
     )

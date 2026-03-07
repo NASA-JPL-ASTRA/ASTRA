@@ -30,9 +30,9 @@
 # ==============================================================================
 
 from enum import Enum
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import Form
+from fastapi import Form, Query
 from pydantic import BaseModel
 
 
@@ -104,6 +104,10 @@ class WhisperTaskRequest(BaseModel):
         "0.0",
         description="裁剪时间戳，避免超出范围问题，默认为 '0'，可以是单个值或使用逗号分隔的多个值。 / Clip timestamps to avoid out-of-range issues, default is '0', can be a single value or multiple values separated by commas"
     )
+    vad_filter: bool = Form(
+        True,
+        description="是否使用 VAD 过滤静音，设为 False 可处理安静/低音量音频 / Whether to use VAD to filter silence, set False for quiet audio"
+    )
     hallucination_silence_threshold: Optional[float] = Form(
         None,
         description="幻听静音阈值 / Hallucination silence threshold"
@@ -132,3 +136,24 @@ class WhisperTaskFileOption(WhisperTaskRequest):
         '',
         description="媒体文件的 URL 地址 / URL address of the media file"
     )
+
+
+class WhisperTaskQueryOption(BaseModel):
+    """Query params for task create (used when params sent as URL query string)."""
+    task_type: str = "transcribe"
+    callback_url: Optional[str] = ""
+    priority: str = "normal"
+    platform: Optional[str] = ""
+    language: str = ""
+    temperature: str = "0.8,1.0"
+    compression_ratio_threshold: float = 1.8
+    no_speech_threshold: float = 0.6
+    condition_on_previous_text: bool = True
+    initial_prompt: str = ""
+    word_timestamps: bool = False
+    prepend_punctuations: str = "\"'\"¿([{-"
+    append_punctuations: str = "\"'.。,，!！?？:：\")]}、"
+    clip_timestamps: str = "0.0"
+    vad_filter: bool = True
+    hallucination_silence_threshold: Optional[float] = None
+    file_url: Optional[str] = ""

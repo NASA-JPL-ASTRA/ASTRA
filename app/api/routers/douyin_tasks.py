@@ -57,7 +57,7 @@ logger = configure_logging(name=__name__)
              )
 async def create_tiktok_video_task(
         request: Request,
-        _DouyinVideoTask: DouyinVideoTask = Form(...),
+        douyin_video_task: DouyinVideoTask = Form(...),
 ) -> Union[ResponseModel, ErrorResponseModel]:
     """
     # [中文]
@@ -95,7 +95,7 @@ async def create_tiktok_video_task(
     - `500`: Unknown error.
     """
     try:
-        url = str(_DouyinVideoTask.url)
+        url = str(douyin_video_task.url)
         data = await DouyinWebCrawler.fetch_one_video_by_url(url)
 
         if not data:
@@ -109,7 +109,7 @@ async def create_tiktok_video_task(
             play_addr = data.get("aweme_detail", {}).get("video", {}).get("play_addr", {}).get("url_list", [])[0]
 
         # 创建任务 | Create task
-        task_data = WhisperTaskFileOption(file_url=play_addr, **_DouyinVideoTask.model_dump())
+        task_data = WhisperTaskFileOption(file_url=play_addr, **douyin_video_task.model_dump())
         task_result = await task_create(
             request=request,
             file_upload=None,
@@ -117,7 +117,7 @@ async def create_tiktok_video_task(
         )
 
         # 是否保存数据到数据库 | Whether to save data to the database
-        if _DouyinVideoTask.save_data_in_db:
+        if douyin_video_task.save_data_in_db:
             # 保存数据到数据库 | Save data to database
             await request.app.state.db_manager.save_crawler_task(
                 task_id=task_result.data.get("id"),

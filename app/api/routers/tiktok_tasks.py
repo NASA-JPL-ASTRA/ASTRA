@@ -57,7 +57,7 @@ logger = configure_logging(name=__name__)
              )
 async def create_tiktok_video_task(
         request: Request,
-        _TikTokVideoTask: TikTokVideoTask = Form(...),
+        tiktok_video_task: TikTokVideoTask = Form(...),
 ) -> Union[ResponseModel, ErrorResponseModel]:
     """
     # [中文]
@@ -95,7 +95,7 @@ async def create_tiktok_video_task(
     - `500`: Unknown error.
     """
     try:
-        url = str(_TikTokVideoTask.url)
+        url = str(tiktok_video_task.url)
         data = await TikTokAPPCrawler.fetch_one_video_by_url(url)
 
         if not data:
@@ -110,7 +110,7 @@ async def create_tiktok_video_task(
             # print(f"Video URL: {url}")
 
         # 创建任务 | Create task
-        task_data = WhisperTaskFileOption(file_url=play_addr, **_TikTokVideoTask.model_dump())
+        task_data = WhisperTaskFileOption(file_url=play_addr, **tiktok_video_task.model_dump())
         task_result = await task_create(
             request=request,
             file_upload=None,
@@ -118,7 +118,7 @@ async def create_tiktok_video_task(
         )
 
         # 是否保存数据到数据库 | Whether to save data to the database
-        if _TikTokVideoTask.save_data_in_db:
+        if tiktok_video_task.save_data_in_db:
             # 保存数据到数据库 | Save data to database
             await request.app.state.db_manager.save_crawler_task(
                 task_id=task_result.data.get("id"),

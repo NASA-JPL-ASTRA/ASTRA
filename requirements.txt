@@ -44,7 +44,8 @@ numba==0.60.0
 numpy==2.0.2
 onnxruntime==1.19.2
 openai==1.54.3
-openai-whisper==20240930
+# openai-whisper 仅在 engine=openai_whisper 时需要，默认 faster_whisper 可省略
+# openai-whisper==20240930
 packaging==24.1
 pillow==11.0.0
 portalocker==2.10.1
@@ -60,7 +61,8 @@ pyreadline3==3.5.4
 python-dotenv==1.0.1
 python-magic==0.4.27
 python-multipart==0.0.12
-pywin32==308
+# pywin32 仅 Windows 需要，macOS/Linux 请忽略
+# pywin32==308
 PyYAML==6.0.2
 regex==2024.9.11
 requests==2.32.3

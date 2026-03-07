@@ -237,11 +237,17 @@ class TaskProcessor:
         while not self.shutdown_event.is_set():
             callback_task = await self.callback_queue.get()
             task = callback_task["task"]
+            raw_result = callback_task.get("result")
+            result_override = raw_result if isinstance(raw_result, dict) and "result" in raw_result else None
 
             try:
-                # 发送回调通知 | Send callback notification
+                # 发送回调通知 | Send callback notification（传入 result 避免 DB 更新竞态导致回调无转写内容）
                 if task.callback_url:
-                    await self.callback_service.task_callback_notification(task=task, db_manager=self.db_manager)
+                    await self.callback_service.task_callback_notification(
+                        task=task,
+                        db_manager=self.db_manager,
+                        result_override=result_override,
+                    )
 
             except Exception as e:
                 self.logger.error(f"Error during callback for task ID {task.id}: {e}")
@@ -444,13 +450,20 @@ class TaskProcessor:
                     "info": info
                 }
 
+                # 调试：确认 Whisper 实际返回的转写内容
+                self.logger.info(
+                    "Task %s: segments=%d text_len=%d text_preview=%s",
+                    task.id, len(segments), len(text), repr(text[:100]) if text else "(empty)",
+                )
+
                 # 过滤幻觉/噪音：不将无效内容存入数据库 | Filter hallucinations/noise: do not store invalid content
-                if Settings.WhisperServiceSettings.FILTER_HALLUCINATION and is_likely_hallucination(text, segments):
+                filtered, filter_reason = is_likely_hallucination(text, segments)
+                if Settings.WhisperServiceSettings.FILTER_HALLUCINATION and filtered:
                     result["text"] = ""
                     result["segments"] = []
                     result["filtered"] = True
-                    result["filtered_reason"] = "noise"
-                    self.logger.info(f"Task {task.id}: filtered as noise/hallucination, result.text cleared")
+                    result["filtered_reason"] = filter_reason or "noise"
+                    self.logger.info(f"Task {task.id}: filtered as noise/hallucination ({result['filtered_reason']}), result.text cleared")
 
                 # 记录任务结束时间 | Record task end time
                 task_end_time: datetime.datetime = datetime.datetime.now()
