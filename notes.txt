@@ -1,0 +1,89 @@
+[2026-02-18T06:37:50.360610] The test begins at 6.50 am the current time received.
+[2026-02-18T06:37:58.840610] The temperature reading is normal, 72.3 degrees. The voltage is 24.8 volts.
+[2026-02-18T06:38:09.620610] The test was completed and the required.
+[2026-02-18T06:37:50.360610] the test begins at 6 50 am the current time received the temperature reading is normal
+[2026-02-18T06:38:02.060610] 72.3 degrees the voltage is 24.8 volts the test was completed and the record
+[2026-02-18T06:37:50.360610] The test begins at 6.50 AM, the current time received, the temperature reading is normal, 72.3 degrees, the voltage is 24.8 volts.
+[2026-02-18T06:38:08.400610] The test was completed and required.
+[2026-02-18T06:37:51.240610] The test begins at 6.50 AM, the current time received.
+[2026-02-18T06:37:58.100610] The temperature reading is normal, 72.3 degrees.
+[2026-02-18T06:38:05.040610] The voltage is 24.8 volts.
+[2026-02-18T06:38:09.620610] The test was completed and the record.
+[2026-02-18T09:03:24.266477] The test begins at 6.50am the current time.
+[2026-02-18T09:03:30.266477] Received. The temperature reading is normal.
+[2026-02-18T09:03:34.266477] 72.3 degrees. The voltage is 24.8 volts.
+[2026-02-18T09:03:42.266477] The test was completed and the record.
+[2026-02-18T09:10:20.369307] The test begins at 6.50 am the current time received.
+[2026-02-18T09:10:28.249307] The temperature reading is normal 72.3 degrees, the voltage is 24.8 volts.
+[2026-02-18T09:10:39.149307] The test was completed and the record.
+[2026-02-18T09:27:55.972510] The test begins at 0650 AM the current time received.
+[2026-02-18T09:28:04.632510] The temperature reading is normal, 72.3 degrees, the voltage is 24.8 volts.
+[2026-02-18T09:28:15.412510] The test was completed and required.
+[2026-02-18T09:52:52.024051] The test begins at 6.50 AM. The current time received, the temperature reading is normal, 72.3 degrees. The voltage is 24.8 volts. The test was completed and the record.
+[2026-02-18T14:50:10.931338] The test begins at 6.50 am, the current time received.
+[2026-02-18T14:50:18.931338] The temperature reading is normal, 72.3 degrees.
+[2026-02-18T14:50:25.191338] The voltage is 24.8 volts.
+[2026-02-18T14:50:29.551338] The test was completed and required.
+[2026-02-19T10:25:24.334514] The test begins at 6.50 a.m. the current time received.
+[2026-02-19T10:25:31.854514] The temperature reading is normal, 72.3 degrees.
+[2026-02-19T10:25:38.434514] The voltage is 24.8 volts.
+[2026-02-19T10:25:42.754514] The test was completed and the record.
+[2026-02-24T07:51:16.149651] Thank you.
+[2026-02-24T07:51:16.149651] Thank you.
+[2026-02-24T07:51:16.149651] Hi, how are you?
+[2026-02-24T07:51:16.149651] Please do not forget to subscribe to the channel and like the video.
+[2026-02-24T07:51:16.149651] hello what are you doing right now
+[2026-02-24T07:51:16.149651] Thank you.
+[2026-02-24T07:51:16.149651] I have to go now.
+[2026-02-24T07:51:16.149651] Let's get started!
+[2026-02-24T07:51:16.149651] The test begins at 6.50 am the kind of time received the temperature reading is normal
+[2026-02-24T07:51:27.009651] 72.3 degrees the voltage is 24.8 volts the test was completed and the record
+[2026-02-24T07:51:16.149651] Thank you!
+[2026-02-24T07:51:16.149651] Thank you for watching.
+[2026-02-24T08:02:26.076326] Thanks.
+[2026-02-24T08:02:26.076326] Thank you for watching!
+[2026-02-24T08:02:26.076326] Thank you.
+[2026-02-24T08:02:26.076326] Thank you.
+[2026-02-24T08:02:26.076326] Thank you.
+[2026-02-24T08:02:26.076326] All right.
+[2026-02-24T08:02:26.076326] Good morning. This is a system test session for Astra. The test begins at 6 50 am
+[2026-02-24T08:02:38.556326] pacific time. Elementary check. Battery voltage is 24.8 Volts.
+[2026-02-24T08:02:26.076326] Motor current is 2.3 amps.
+[2026-02-24T08:02:32.656326] Internal temperature is 72.3 degrees.
+[2026-02-24T08:02:26.076326] Okay.
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] .
+[2026-02-24T08:27:14.812723] Субтитры сделал DimaTorzok
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] Good morning. This is a system test session for Astra.
+[2026-02-24T08:27:14.812723] The test begins at 6.50 a.m. Pacific time.
+[2026-02-24T08:27:24.212723] Elementary check.
+[2026-02-24T08:27:14.812723] Battery voltage is 24.8 volts Motor current is 2.3 amps
+[2026-02-24T08:27:29.072723] Internal temperature is 72.3 degrees
+[2026-02-24T08:27:14.812723] telemetry check
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] control C
+[2026-02-24T08:27:14.812723] you
+[2026-02-24T08:27:14.812723] 你好
+[2026-02-24T08:27:14.812723] 你好
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] Good morning, this is a system test session for ASTROT.
+[2026-02-24T08:27:14.812723] The test begins at 6.50am PT.
+[2026-02-24T08:27:23.652723] Telemetry check.
+[2026-02-24T08:27:26.192723] Battery voltage is 24.8V, motor current is 2.3A.
+[2026-02-24T08:27:14.812723] The internal temperature is 72.3 degrees.
+[2026-02-24T08:27:14.812723] telemetry check.
+[2026-02-24T08:27:14.812723] Battery voltage is 24.8 volts.
+[2026-02-24T08:27:14.812723] Okay.
+[2026-02-24T08:27:14.812723] Battery voltage is 24.8V, motor current is 2.3A.
+[2026-02-24T08:27:14.812723] Silence.
+[2026-02-24T08:27:14.812723] Thank you.
+[2026-02-24T08:27:14.812723] Продолжение следует...
+[2026-02-24T08:49:28.876731] Good morning, this is a system test session for Astra.
+[2026-02-24T08:49:28.876731] Battery voltage is 24.8 Volts.
+[2026-02-24T08:49:34.836731] Motor current is 2.3 Amps.
+[2026-02-24T08:49:39.316731] Internal temperature is 72.3 degrees.
+[2026-02-24T08:49:28.876731] The test begins at 6.50 a.m. Pacific time.
+[2026-02-24T08:49:28.876731] telemetry check
