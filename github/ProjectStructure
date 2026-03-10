@@ -1,0 +1,70 @@
+# Date: 2024-11-11-02:21:45
+Fast-Powerful-Whisper-AI-Services-API
+  app
+    api
+      models
+        APIResponseModel.py
+		ChatGPTTaskRequest.py
+		DouyinTaskRequest.py
+		TikTokTaskRequest.py
+		WhisperTaskRequest.py
+		WorkFlowModels.py
+      routers
+        health_check.py
+        whisper_tasks.py
+        work_flows.py
+		chatgpt_tasks.py
+		douyin_tasks.py
+		tiktok_tasks.py
+      router.py
+    crawlers
+      platforms
+        douyin
+          abogus.py
+          crawler.py
+          endpoints.py
+          models.py
+          utils.py
+        tiktok
+          crawler.py
+          endpoints.py
+          models.py
+          README.md
+    database
+		models
+		  TaskModels.py
+		  WorkFlowModels.py
+		  ChatGPTModels.py
+		  CrawlerModels.py
+      DatabaseManager.py
+    http_client
+      AsyncHttpClient.py
+      HttpException.py
+    model_pool
+      AsyncModelPool.py
+    processors
+      task_processor.py
+      workflow_processor.py
+    services
+      callback_service.py
+      workflow_service.py
+      whisper_service.py
+    utils
+      file_utils.py
+      logging_utils.py
+    workflows
+      components
+        base_component.py
+        component_a.py
+        component_b.py
+    main.py
+  config
+    settings.py -> Config File
+  temp_files
+    -> Default TEMP Files Folder
+  log_files
+    -> Default LOG Files Folder
+  main.py -> Application entry point
+WhisperServiceAPI.db -> Default SQLite DB File
+requirements.txt
+start.py -> Run to start the API
