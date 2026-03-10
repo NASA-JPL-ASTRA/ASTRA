@@ -54,8 +54,9 @@ choco install ffmpeg
 ## 三、克隆仓库
 
 ```bash
-git clone https://github.com/YOUR_ORG/ASTRA-quickdemo.git
-cd ASTRA-quickdemo
+git clone https://github.com/NASA-JPL-ASTRA/ASTRA.git
+cd ASTRA
+git checkout quickdemo
 ```
 
 ---
@@ -65,7 +66,7 @@ cd ASTRA-quickdemo
 ### 1. Whisper API（Python）
 
 ```bash
-cd ASTRA-quickdemo
+cd ASTRA   # 或克隆后的项目目录
 
 # 创建虚拟环境（推荐）
 python -m venv venv
@@ -88,7 +89,7 @@ pip install -r requirements-realtime.txt
 ```bash
 cd backend
 
-# 使用同一虚拟环境，或新建
+# 使用同一虚拟环境
 pip install -r requirements.txt
 
 # 可选：复制环境配置
@@ -117,7 +118,7 @@ yarn install
 
 **macOS / Linux:**
 ```bash
-cd ASTRA-quickdemo
+cd ASTRA   # 克隆后的项目目录
 
 # 启动 Whisper API + Backend（默认使用本机 backend/）
 ./scripts/start_astra.sh
@@ -128,7 +129,8 @@ CLEAR_QUEUE_ON_START=1 ./scripts/start_astra.sh
 
 **Windows (CMD 或 PowerShell):**
 ```cmd
-cd ASTRA-quickdemo
+cd ASTRA
+REM 克隆后的项目目录
 
 REM 启动 Whisper API + Backend（会打开两个新窗口）
 scripts\start_astra.bat
@@ -141,7 +143,7 @@ scripts\start_astra.bat
 启动成功后，**另开一个终端**启动前端：
 
 ```bash
-cd ASTRA-quickdemo/frontend
+cd ASTRA/frontend
 npm run dev
 ```
 
@@ -161,26 +163,26 @@ scripts\start_astra.bat
 
 **终端 1 — Whisper API:**
 ```bash
-cd ASTRA-quickdemo
+cd ASTRA
 PORT=8001 python start.py
 ```
 
 **终端 2 — ASTRA Backend:**
 ```bash
-cd ASTRA-quickdemo/backend
+cd ASTRA/backend
 WHISPER_API_URL=http://127.0.0.1:8001 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 **终端 3 — Frontend:**
 ```bash
-cd ASTRA-quickdemo/frontend
+cd ASTRA/frontend
 npm run dev
 ```
 
 ### 方式 D：仅运行 realtime_demo（无前端）
 
 ```bash
-cd ASTRA-quickdemo
+cd ASTRA
 
 # 先启动 Whisper + Backend（方式 A 或 B）
 

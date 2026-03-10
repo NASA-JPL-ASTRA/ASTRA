@@ -98,8 +98,8 @@ if [ ! -d "$FRONTEND_DIR" ] && [ -n "$ASTRA_BACKEND_PATH" ]; then
   FRONTEND_DIR="$(cd "$ASTRA_BACKEND_PATH/../frontend" 2>/dev/null && pwd)"
 fi
 if [ -n "$FRONTEND_DIR" ] && [ -d "$FRONTEND_DIR" ]; then
-    echo "Or start Frontend (in another terminal):"
-    echo "  cd $FRONTEND_DIR && npm run dev"
+  echo "Or start Frontend (in another terminal):"
+  echo "  cd $FRONTEND_DIR && npm run dev"
 fi
 echo "=========================================="
 echo ""
