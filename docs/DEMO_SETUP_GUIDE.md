@@ -99,10 +99,12 @@ cp .env.example .env
 
 ### 3. Frontend（Node.js）
 
+**首次运行 Frontend 前必须执行**，否则会报 `vite: command not found`：
+
 ```bash
 cd frontend   # 若在 backend 目录，则为 cd ../frontend
 
-# 安装依赖
+# 安装依赖（含 vite）
 npm install
 # 或
 pnpm install
@@ -144,6 +146,7 @@ scripts\start_astra.bat
 
 ```bash
 cd ASTRA/frontend
+npm install   # 首次运行必须执行，安装 vite 等依赖
 npm run dev
 ```
 
@@ -157,7 +160,7 @@ npm run dev
 scripts\start_astra.bat
 ```
 
-会新开两个窗口分别运行 Whisper API 和 Backend，本窗口可关闭。然后另开终端启动 Frontend。
+会新开两个窗口分别运行 Whisper API 和 Backend，本窗口可关闭。然后另开终端，进入 `frontend` 目录，执行 `npm install`（首次）和 `npm run dev` 启动 Frontend。
 
 ### 方式 C：手动启动（各平台通用）
 
@@ -176,6 +179,7 @@ WHISPER_API_URL=http://127.0.0.1:8001 python -m uvicorn app.main:app --host 0.0.
 **终端 3 — Frontend:**
 ```bash
 cd ASTRA/frontend
+npm install   # 首次运行必须执行
 npm run dev
 ```
 
@@ -240,6 +244,16 @@ bash scripts/start_astra.sh
 
 ```bash
 ffmpeg -version
+```
+
+### 6. `vite: command not found` 或 Frontend 启动失败
+
+首次运行 Frontend 前必须先安装依赖：
+
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
