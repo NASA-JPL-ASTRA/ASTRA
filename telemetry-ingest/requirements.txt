@@ -1,0 +1,2 @@
+influxdb-client==1.40.0
+numpy>=1.20.0
