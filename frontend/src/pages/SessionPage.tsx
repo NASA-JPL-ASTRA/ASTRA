@@ -57,7 +57,7 @@ export default function SessionPage() {
   }, [isRecording]);
 
   const elapsed = sessionStartTime
-    ? Math.floor((nowTs - sessionStartTime.getTime()) / 1000)
+    ? Math.max(0, Math.floor((nowTs - sessionStartTime.getTime()) / 1000))
     : 0;
   const elapsedStr = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
 

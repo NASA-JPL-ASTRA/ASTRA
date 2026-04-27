@@ -330,7 +330,7 @@ export default function TranscriptionPanel() {
 
   const recordingSeconds =
     isRecording && sessionStartTime
-      ? Math.floor((now.getTime() - sessionStartTime.getTime()) / 1000)
+      ? Math.max(0, Math.floor((now.getTime() - sessionStartTime.getTime()) / 1000))
       : 0;
 
   const uniqueSpeakers = new Set(transcriptions.map((t) => t.speakerId)).size;
