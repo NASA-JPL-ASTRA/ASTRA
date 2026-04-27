@@ -1,0 +1,241 @@
+
+<h2 class="sr-only">ASTRA Telemetry Query UI — four compact panels for channel value, range stats, events, and channel search against the local Flask API</h2>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+.w{font-family:var(--font-sans);padding:1rem 0;max-width:680px}
+.topbar{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.astra-mark{width:24px;height:24px;background:#4B2E83;border-radius:5px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.astra-mark svg{width:13px;height:13px}
+.topbar-title{font-size:13px;font-weight:500;color:var(--color-text-primary)}
+.topbar-host{font-family:var(--font-mono);font-size:11px;color:var(--color-text-tertiary);margin-left:auto}
+.sbar{display:flex;align-items:center;gap:8px;background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 12px;margin-bottom:16px}
+.sbar-lbl{font-size:11px;color:var(--color-text-tertiary);flex-shrink:0}
+.sbar input{flex:1;font-family:var(--font-mono);font-size:12px;background:transparent;border:none;outline:none;color:var(--color-text-primary)}
+.dot{width:6px;height:6px;border-radius:50%;background:#1D9E75;flex-shrink:0}
+.dot-lbl{font-size:11px;color:#0F6E56}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);overflow:hidden}
+.card-top{display:flex;align-items:center;gap:7px;padding:10px 12px 9px;border-bottom:0.5px solid var(--color-border-tertiary);background:var(--color-background-secondary)}
+.method{font-size:10px;font-weight:500;font-family:var(--font-mono);padding:2px 6px;border-radius:4px;background:#EEEDFE;color:#534AB7;flex-shrink:0}
+.card-title{font-size:12px;font-weight:500;color:var(--color-text-primary)}
+.card-path{font-family:var(--font-mono);font-size:10px;color:var(--color-text-tertiary);margin-left:auto}
+.body{padding:11px 12px;display:flex;flex-direction:column;gap:8px}
+.f{display:flex;flex-direction:column;gap:3px}
+.f-lbl{font-size:10px;color:var(--color-text-tertiary);letter-spacing:.02em}
+.f input,.f select{font-family:var(--font-mono);font-size:12px;padding:5px 8px;background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);width:100%;outline:none}
+.f input:focus,.f select:focus{border-color:#7F77DD;box-shadow:0 0 0 2px rgba(127,119,221,.12)}
+.f2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.run{width:100%;padding:6px;font-size:12px;font-weight:500;border-radius:var(--border-radius-md);border:none;cursor:pointer;background:#4B2E83;color:#fff;letter-spacing:.01em}
+.run:hover{background:#3C3489}
+.run:active{transform:scale(.98)}
+.out{min-height:52px;border-radius:var(--border-radius-md);background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);padding:8px 10px;font-family:var(--font-mono);font-size:11px;color:var(--color-text-tertiary);line-height:1.55;max-height:150px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.out.ok{color:var(--color-text-primary);border-color:#5DCAA5}
+.out.er{color:#993C1D;border-color:#F0997B;background:#FAECE7}
+.ph{font-family:var(--font-sans);font-size:11px;font-style:italic;color:var(--color-text-tertiary)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.sc{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:7px 9px}
+.sc-lbl{font-size:10px;color:var(--color-text-tertiary);margin-bottom:2px}
+.sc-val{font-size:17px;font-weight:500;color:var(--color-text-primary);font-family:var(--font-mono)}
+.evs{display:flex;flex-direction:column;gap:5px;max-height:148px;overflow-y:auto}
+.er-row{display:flex;gap:7px;align-items:flex-start;padding:5px 7px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border-left:2px solid transparent}
+.er-row.warning{border-left-color:#EF9F27}
+.er-row.activity_hi{border-left-color:#1D9E75}
+.er-row.activity_lo{border-left-color:#378ADD}
+.er-row.command{border-left-color:#7F77DD}
+.sev-pill{font-size:9px;font-weight:500;padding:1px 5px;border-radius:99px;white-space:nowrap;flex-shrink:0;margin-top:2px}
+.sv-w{background:#FAEEDA;color:#854F0B}
+.sv-h{background:#E1F5EE;color:#0F6E56}
+.sv-l{background:#E6F1FB;color:#185FA5}
+.sv-c{background:#EEEDFE;color:#534AB7}
+.er-body{flex:1;min-width:0}
+.er-name{font-size:11px;font-weight:500;color:var(--color-text-primary);font-family:var(--font-mono)}
+.er-msg{font-size:10px;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.er-ts{font-size:10px;color:var(--color-text-tertiary);font-family:var(--font-mono);flex-shrink:0;white-space:nowrap}
+.sr-rows{display:flex;flex-direction:column;gap:4px}
+.sr-row{display:flex;align-items:center;gap:8px;padding:5px 7px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);cursor:pointer}
+.sr-row:hover{background:var(--color-background-tertiary)}
+.sr-ch{font-size:11px;font-family:var(--font-mono);color:var(--color-text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sr-track{width:44px;height:3px;background:var(--color-border-tertiary);border-radius:2px;flex-shrink:0}
+.sr-fill{height:100%;background:#7F77DD;border-radius:2px}
+.sr-sc{font-size:10px;font-family:var(--font-mono);color:var(--color-text-secondary);min-width:28px;text-align:right}
+.foot{text-align:center;font-size:10px;color:var(--color-text-tertiary);margin-top:12px;font-family:var(--font-mono)}
+.copied{font-size:10px;color:#0F6E56;text-align:center;margin-top:4px;min-height:14px}
+</style>
+
+<div class="w">
+  <div class="topbar">
+    <div class="astra-mark"><svg viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6.5 1L1.5 3.5v3.8c0 2.8 2.1 5.4 5 6 2.9-.6 5-3.2 5-6V3.5L6.5 1z" fill="white"/></svg></div>
+    <span class="topbar-title">ASTRA telemetry query</span>
+    <span class="topbar-host">localhost:5001</span>
+  </div>
+
+  <div class="sbar">
+    <span class="sbar-lbl">session</span>
+    <input id="g-sess" value="test_4_motor_stall" spellcheck="false">
+    <div class="dot"></div>
+    <span class="dot-lbl">API running</span>
+  </div>
+
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-top">
+        <span class="method">GET</span>
+        <span class="card-title">channel value</span>
+        <span class="card-path">/channel</span>
+      </div>
+      <div class="body">
+        <div class="f"><span class="f-lbl">channel name</span><input id="ch-n" value="motors.motor4_current" spellcheck="false"></div>
+        <div class="f"><span class="f-lbl">at — unix timestamp</span><input id="ch-t" value="" spellcheck="false"></div>
+        <button class="run" onclick="doChannel()">run query</button>
+        <div id="ch-out" class="out"><span class="ph">result appears here</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top">
+        <span class="method">GET</span>
+        <span class="card-title">range stats</span>
+        <span class="card-path">/range</span>
+      </div>
+      <div class="body">
+        <div class="f"><span class="f-lbl">channel name</span><input id="rn-n" value="motors.motor4_current" spellcheck="false"></div>
+        <div class="f2">
+          <div class="f"><span class="f-lbl">t0 — start</span><input id="rn-t0" value="" spellcheck="false"></div>
+          <div class="f"><span class="f-lbl">t1 — end</span><input id="rn-t1" value="" spellcheck="false"></div>
+        </div>
+        <button class="run" onclick="doRange()">run query</button>
+        <div id="rn-stats" class="stats" style="display:none">
+          <div class="sc"><div class="sc-lbl">min</div><div class="sc-val" id="s-min">—</div></div>
+          <div class="sc"><div class="sc-lbl">max</div><div class="sc-val" id="s-max">—</div></div>
+          <div class="sc"><div class="sc-lbl">mean</div><div class="sc-val" id="s-mean">—</div></div>
+          <div class="sc"><div class="sc-lbl">last</div><div class="sc-val" id="s-last">—</div></div>
+        </div>
+        <div id="rn-out" class="out"><span class="ph">result appears here</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top">
+        <span class="method">GET</span>
+        <span class="card-title">events</span>
+        <span class="card-path">/events</span>
+      </div>
+      <div class="body">
+        <div class="f2">
+          <div class="f"><span class="f-lbl">t0 — start</span><input id="ev-t0" value="" spellcheck="false"></div>
+          <div class="f"><span class="f-lbl">t1 — end</span><input id="ev-t1" value="" spellcheck="false"></div>
+        </div>
+        <div class="f2">
+          <div class="f"><span class="f-lbl">severity</span>
+            <select id="ev-sv">
+              <option>all</option>
+              <option>warning</option>
+              <option>activity_hi</option>
+              <option>activity_lo</option>
+              <option>command</option>
+            </select>
+          </div>
+          <div class="f"><span class="f-lbl">limit</span><input id="ev-lim" value="20" spellcheck="false"></div>
+        </div>
+        <button class="run" onclick="doEvents()">run query</button>
+        <div id="ev-out" class="out"><span class="ph">result appears here</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top">
+        <span class="method">GET</span>
+        <span class="card-title">channel search</span>
+        <span class="card-path">/search</span>
+      </div>
+      <div class="body">
+        <div class="f"><span class="f-lbl">natural language query</span><input id="sr-q" value="motor temperature" spellcheck="false"></div>
+        <div class="f"><span class="f-lbl">results (k)</span><input id="sr-k" value="3" spellcheck="false"></div>
+        <button class="run" onclick="doSearch()">run query</button>
+        <div id="sr-rows" class="sr-rows" style="display:none"></div>
+        <div id="sr-out" class="out"><span class="ph">click a result to use its channel name</span></div>
+        <div id="sr-copied" class="copied"></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="foot">all requests → http://localhost:5001 · make sure Flask is running</div>
+</div>
+
+<script>
+const B="http://localhost:5001";
+const sess=()=>document.getElementById("g-sess").value.trim();
+
+function setOut(id,data,err){
+  const el=document.getElementById(id);
+  el.className="out "+(err?"er":"ok");
+  el.textContent=typeof data==="string"?data:JSON.stringify(data,null,2);
+}
+
+async function req(path,p){
+  const u=new URL(B+path);
+  Object.entries(p).forEach(([k,v])=>u.searchParams.set(k,v));
+  try{
+    const r=await fetch(u.toString());
+    return{ok:r.ok,data:await r.json(),status:r.status};
+  }catch(e){
+    return{ok:false,data:{error:"Cannot reach "+B+" — is Flask running?"},status:0};
+  }
+}
+
+async function doChannel(){
+  const r=await req("/channel",{session:sess(),name:document.getElementById("ch-n").value.trim(),at:document.getElementById("ch-t").value.trim()});
+  setOut("ch-out",r.data,!r.ok);
+}
+
+async function doRange(){
+  const r=await req("/range",{session:sess(),name:document.getElementById("rn-n").value.trim(),t0:document.getElementById("rn-t0").value.trim(),t1:document.getElementById("rn-t1").value.trim()});
+  const st=document.getElementById("rn-stats"),ro=document.getElementById("rn-out");
+  if(r.ok&&r.data.min!==undefined){
+    st.style.display="grid";ro.style.display="none";
+    ["min","max","mean","last"].forEach(k=>{document.getElementById("s-"+k).textContent=parseFloat(r.data[k]).toFixed(3);});
+  }else{
+    st.style.display="none";ro.style.display="block";
+    setOut("rn-out",r.data,!r.ok);
+  }
+}
+
+async function doEvents(){
+  const r=await req("/events",{session:sess(),t0:document.getElementById("ev-t0").value.trim(),t1:document.getElementById("ev-t1").value.trim(),severity:document.getElementById("ev-sv").value,limit:document.getElementById("ev-lim").value.trim()});
+  const el=document.getElementById("ev-out");
+  if(r.ok&&Array.isArray(r.data)){
+    if(!r.data.length){el.className="out ok";el.innerHTML='<span class="ph">no events in this window</span>';return;}
+    el.className="out ok";el.style.padding="6px";
+    const sc={warning:"sv-w",activity_hi:"sv-h",activity_lo:"sv-l",command:"sv-c"};
+    el.innerHTML='<div class="evs">'+r.data.map(e=>{
+      const ts=new Date(e.timestamp*1000).toISOString().substr(11,8);
+      return`<div class="er-row ${e.severity}"><span class="sev-pill ${sc[e.severity]||""}">${e.severity}</span><div class="er-body"><div class="er-name">${e.evr_name}</div><div class="er-msg">${e.message}</div></div><span class="er-ts">${ts}</span></div>`;
+    }).join("")+'</div>';
+  }else{setOut("ev-out",r.data,!r.ok);}
+}
+
+async function doSearch(){
+  const r=await req("/search",{q:document.getElementById("sr-q").value.trim(),k:document.getElementById("sr-k").value.trim()});
+  const rows=document.getElementById("sr-rows"),out=document.getElementById("sr-out");
+  if(r.ok&&Array.isArray(r.data)&&r.data.length){
+    out.style.display="none";rows.style.display="flex";
+    rows.innerHTML=r.data.map(x=>{
+      const pct=Math.round(x.score*100);
+      return`<div class="sr-row" onclick="useChannel('${x.channel}')"><span class="sr-ch">${x.channel}</span><div class="sr-track"><div class="sr-fill" style="width:${pct}%"></div></div><span class="sr-sc">${x.score.toFixed(2)}</span></div>`;
+    }).join("");
+  }else{
+    rows.style.display="none";out.style.display="block";
+    setOut("sr-out",r.data.length===0?"no matches found":r.data,!r.ok);
+  }
+}
+
+function useChannel(name){
+  document.getElementById("ch-n").value=name;
+  document.getElementById("rn-n").value=name;
+  navigator.clipboard.writeText(name).catch(()=>{});
+  const c=document.getElementById("sr-copied");
+  c.textContent=name+" copied to channel panels";
+  setTimeout(()=>{c.textContent=""},2200);
+}
+</script>

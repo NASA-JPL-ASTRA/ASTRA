@@ -1,0 +1,331 @@
+
+<h2 class="sr-only">AiSTRA Telemetry Query UI — four panels to call the Flask API endpoints: channel value, range stats, events, and channel search</h2>
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); }
+.root { padding: 1rem 0; }
+.header { display: flex; align-items: center; gap: 10px; margin-bottom: 1.5rem; }
+.logo { width: 28px; height: 28px; background: #4B2E83; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+.logo svg { width: 16px; height: 16px; fill: white; }
+.header-title { font-size: 16px; font-weight: 500; color: var(--color-text-primary); }
+.header-sub { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; font-family: var(--font-mono); }
+
+.session-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); margin-bottom: 1.5rem; }
+.session-bar label { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
+.session-bar input { flex: 1; font-family: var(--font-mono); font-size: 13px; background: var(--color-background-primary); border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 5px 10px; color: var(--color-text-primary); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #1D9E75; flex-shrink: 0; }
+.status-label { font-size: 11px; color: #0F6E56; }
+
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.panel { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 10px; }
+.panel-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.panel-badge { font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 99px; font-family: var(--font-mono); }
+.badge-get { background: #EAF3DE; color: #3B6D11; }
+.panel-name { font-size: 14px; font-weight: 500; color: var(--color-text-primary); }
+.panel-path { font-size: 11px; color: var(--color-text-secondary); font-family: var(--font-mono); margin-left: auto; }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 11px; color: var(--color-text-secondary); }
+.field input, .field select { font-size: 13px; font-family: var(--font-mono); background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 6px 10px; color: var(--color-text-primary); width: 100%; }
+.field input:focus, .field select:focus { outline: none; border-color: #7F77DD; box-shadow: 0 0 0 2px rgba(127,119,221,0.15); }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.btn { width: 100%; padding: 7px; font-size: 13px; font-weight: 500; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); cursor: pointer; background: transparent; color: var(--color-text-primary); transition: background 0.1s; margin-top: 2px; }
+.btn:hover { background: var(--color-background-secondary); }
+.btn:active { transform: scale(0.98); }
+.btn-primary { background: #4B2E83; color: white; border-color: #4B2E83; }
+.btn-primary:hover { background: #3C3489; }
+
+.result-box { min-height: 56px; background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; line-height: 1.6; }
+.result-box.ok { color: var(--color-text-primary); border-color: #5DCAA5; }
+.result-box.err { color: #993C1D; border-color: #F0997B; background: #FAECE7; }
+.result-placeholder { color: var(--color-text-tertiary); font-style: italic; font-family: var(--font-sans); font-size: 12px; }
+
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.stat-card { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px 10px; }
+.stat-card .s-label { font-size: 10px; color: var(--color-text-secondary); margin-bottom: 2px; }
+.stat-card .s-val { font-size: 18px; font-weight: 500; color: var(--color-text-primary); font-family: var(--font-mono); }
+
+.event-list { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
+.event-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; background: var(--color-background-secondary); border-radius: var(--border-radius-md); border-left: 2px solid transparent; }
+.event-row.warning { border-left-color: #EF9F27; }
+.event-row.activity_hi { border-left-color: #5DCAA5; }
+.event-row.activity_lo { border-left-color: #85B7EB; }
+.event-row.command { border-left-color: #AFA9EC; }
+.ev-sev { font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 99px; white-space: nowrap; flex-shrink: 0; margin-top: 1px; }
+.sev-warning { background: #FAEEDA; color: #854F0B; }
+.sev-activity_hi { background: #E1F5EE; color: #0F6E56; }
+.sev-activity_lo { background: #E6F1FB; color: #185FA5; }
+.sev-command { background: #EEEDFE; color: #534AB7; }
+.ev-body { flex: 1; min-width: 0; }
+.ev-name { font-size: 11px; font-weight: 500; color: var(--color-text-primary); font-family: var(--font-mono); }
+.ev-msg { font-size: 11px; color: var(--color-text-secondary); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-ts { font-size: 10px; color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap; flex-shrink: 0; }
+
+.search-result { display: flex; flex-direction: column; gap: 5px; }
+.sr-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--color-background-secondary); border-radius: var(--border-radius-md); cursor: pointer; }
+.sr-row:hover { background: var(--color-background-tertiary); }
+.sr-channel { font-size: 12px; font-family: var(--font-mono); color: var(--color-text-primary); flex: 1; }
+.sr-bar-wrap { width: 60px; height: 4px; background: var(--color-border-tertiary); border-radius: 2px; overflow: hidden; }
+.sr-bar { height: 100%; background: #7F77DD; border-radius: 2px; }
+.sr-score { font-size: 11px; color: var(--color-text-secondary); font-family: var(--font-mono); min-width: 34px; text-align: right; }
+
+.copy-hint { font-size: 10px; color: var(--color-text-tertiary); text-align: center; margin-top: 2px; }
+</style>
+
+<div class="root">
+  <div class="header">
+    <div class="logo"><svg viewBox="0 0 16 16"><path d="M8 1L2 4v4c0 3.3 2.5 6.4 6 7 3.5-.6 6-3.7 6-7V4L8 1z"/></svg></div>
+    <span class="header-title">AiSTRA telemetry query</span>
+    <span class="header-sub">localhost:5001</span>
+  </div>
+
+  <div class="session-bar">
+    <label>session</label>
+    <input id="g-session" value="test_4_motor_stall" placeholder="session_id" />
+    <div class="status-dot"></div>
+    <span class="status-label">API running</span>
+  </div>
+
+  <div class="panels">
+
+    <!-- Panel 1: /channel -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-badge badge-get">GET</span>
+        <span class="panel-name">channel value</span>
+        <span class="panel-path">/channel</span>
+      </div>
+      <div class="field">
+        <label>channel name</label>
+        <input id="ch-name" value="motors.motor4_current" />
+      </div>
+      <div class="field">
+        <label>at (unix timestamp)</label>
+        <input id="ch-at" value="" />
+      </div>
+      <button class="btn btn-primary" onclick="callChannel()">run query</button>
+      <div id="ch-result" class="result-box"><span class="result-placeholder">result appears here</span></div>
+    </div>
+
+    <!-- Panel 2: /range -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-badge badge-get">GET</span>
+        <span class="panel-name">range stats</span>
+        <span class="panel-path">/range</span>
+      </div>
+      <div class="field">
+        <label>channel name</label>
+        <input id="rng-name" value="motors.motor4_current" />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>t0 (start)</label>
+          <input id="rng-t0" value="" />
+        </div>
+        <div class="field">
+          <label>t1 (end)</label>
+          <input id="rng-t1" value="" />
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="callRange()">run query</button>
+      <div id="rng-stats" class="stat-grid" style="display:none">
+        <div class="stat-card"><div class="s-label">min</div><div class="s-val" id="s-min">—</div></div>
+        <div class="stat-card"><div class="s-label">max</div><div class="s-val" id="s-max">—</div></div>
+        <div class="stat-card"><div class="s-label">mean</div><div class="s-val" id="s-mean">—</div></div>
+        <div class="stat-card"><div class="s-label">last</div><div class="s-val" id="s-last">—</div></div>
+      </div>
+      <div id="rng-result" class="result-box"><span class="result-placeholder">result appears here</span></div>
+    </div>
+
+    <!-- Panel 3: /events -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-badge badge-get">GET</span>
+        <span class="panel-name">events</span>
+        <span class="panel-path">/events</span>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>t0 (start)</label>
+          <input id="ev-t0" value="" />
+        </div>
+        <div class="field">
+          <label>t1 (end)</label>
+          <input id="ev-t1" value="" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>severity</label>
+          <select id="ev-sev">
+            <option value="all">all</option>
+            <option value="warning">warning</option>
+            <option value="activity_hi">activity_hi</option>
+            <option value="activity_lo">activity_lo</option>
+            <option value="command">command</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>limit</label>
+          <input id="ev-limit" value="20" />
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="callEvents()">run query</button>
+      <div id="ev-list" class="result-box"><span class="result-placeholder">result appears here</span></div>
+    </div>
+
+    <!-- Panel 4: /search -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-badge badge-get">GET</span>
+        <span class="panel-name">channel search</span>
+        <span class="panel-path">/search</span>
+      </div>
+      <div class="field">
+        <label>natural language query</label>
+        <input id="sr-q" value="motor temperature" placeholder="e.g. bus voltage, rear motor current" />
+      </div>
+      <div class="field">
+        <label>results (k)</label>
+        <input id="sr-k" value="3" />
+      </div>
+      <button class="btn btn-primary" onclick="callSearch()">run query</button>
+      <div id="sr-result" class="result-box"><span class="result-placeholder">click a result to copy channel name</span></div>
+      <div id="sr-list" class="search-result" style="display:none"></div>
+    </div>
+
+  </div>
+
+  <p class="copy-hint" style="margin-top: 1rem;">all requests go to <span style="font-family: var(--font-mono);">http://localhost:5001</span> — make sure your Flask server is running</p>
+</div>
+
+<script>
+const BASE = "http://localhost:5001";
+
+function session() { return document.getElementById("g-session").value.trim(); }
+
+function setResult(id, data, isErr) {
+  const el = document.getElementById(id);
+  el.className = "result-box " + (isErr ? "err" : "ok");
+  el.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+}
+
+async function apiFetch(path, params) {
+  const url = new URL(BASE + path);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  try {
+    const r = await fetch(url.toString());
+    const json = await r.json();
+    return { ok: r.ok, data: json, status: r.status };
+  } catch (e) {
+    return { ok: false, data: { error: "Could not reach " + BASE + " — is the Flask server running?" }, status: 0 };
+  }
+}
+
+async function callChannel() {
+  const name = document.getElementById("ch-name").value.trim();
+  const at   = document.getElementById("ch-at").value.trim();
+  const res  = await apiFetch("/channel", { session: session(), name, at });
+  setResult("ch-result", res.data, !res.ok);
+}
+
+async function callRange() {
+  const name = document.getElementById("rng-name").value.trim();
+  const t0   = document.getElementById("rng-t0").value.trim();
+  const t1   = document.getElementById("rng-t1").value.trim();
+  const res  = await apiFetch("/range", { session: session(), name, t0, t1 });
+
+  const statsEl = document.getElementById("rng-stats");
+  const resultEl = document.getElementById("rng-result");
+
+  if (res.ok && res.data.min !== undefined) {
+    statsEl.style.display = "grid";
+    resultEl.style.display = "none";
+    ["min","max","mean","last"].forEach(k => {
+      document.getElementById("s-" + k).textContent = parseFloat(res.data[k]).toFixed(3);
+    });
+  } else {
+    statsEl.style.display = "none";
+    resultEl.style.display = "block";
+    setResult("rng-result", res.data, !res.ok);
+  }
+}
+
+async function callEvents() {
+  const t0    = document.getElementById("ev-t0").value.trim();
+  const t1    = document.getElementById("ev-t1").value.trim();
+  const sev   = document.getElementById("ev-sev").value;
+  const limit = document.getElementById("ev-limit").value.trim();
+  const res   = await apiFetch("/events", { session: session(), t0, t1, severity: sev, limit });
+
+  const listEl = document.getElementById("ev-list");
+
+  if (res.ok && Array.isArray(res.data)) {
+    if (res.data.length === 0) {
+      listEl.className = "result-box ok";
+      listEl.innerHTML = '<span style="color:var(--color-text-tertiary);font-family:var(--font-sans);font-size:12px;font-style:italic;">no events in this window</span>';
+      return;
+    }
+    listEl.className = "result-box ok";
+    listEl.style.padding = "6px";
+    const sevClass = { warning: "sev-warning", activity_hi: "sev-activity_hi", activity_lo: "sev-activity_lo", command: "sev-command" };
+    listEl.innerHTML = res.data.map(e => {
+      const ts = new Date(e.timestamp * 1000).toISOString().substr(11, 8);
+      const sc = sevClass[e.severity] || "";
+      return `<div class="event-row ${e.severity}">
+        <span class="ev-sev ${sc}">${e.severity}</span>
+        <div class="ev-body">
+          <div class="ev-name">${e.evr_name}</div>
+          <div class="ev-msg">${e.message}</div>
+        </div>
+        <span class="ev-ts">${ts}</span>
+      </div>`;
+    }).join("");
+  } else {
+    setResult("ev-list", res.data, !res.ok);
+  }
+}
+
+async function callSearch() {
+  const q   = document.getElementById("sr-q").value.trim();
+  const k   = document.getElementById("sr-k").value.trim();
+  const res = await apiFetch("/search", { q, k });
+
+  const listEl   = document.getElementById("sr-list");
+  const resultEl = document.getElementById("sr-result");
+
+  if (res.ok && Array.isArray(res.data)) {
+    if (res.data.length === 0) {
+      listEl.style.display = "none";
+      setResult("sr-result", "no matches found", false);
+      return;
+    }
+    resultEl.style.display = "none";
+    listEl.style.display = "flex";
+    listEl.innerHTML = res.data.map(r => {
+      const pct = Math.round(r.score * 100);
+      return `<div class="sr-row" onclick="copyChannel('${r.channel}')">
+        <span class="sr-channel">${r.channel}</span>
+        <div class="sr-bar-wrap"><div class="sr-bar" style="width:${pct}%"></div></div>
+        <span class="sr-score">${r.score.toFixed(2)}</span>
+      </div>`;
+    }).join("");
+  } else {
+    listEl.style.display = "none";
+    setResult("sr-result", res.data, !res.ok);
+  }
+}
+
+function copyChannel(name) {
+  navigator.clipboard.writeText(name).catch(() => {});
+  document.getElementById("ch-name").value = name;
+  document.getElementById("rng-name").value = name;
+  const hint = document.querySelector(".copy-hint");
+  const orig = hint.innerHTML;
+  hint.innerHTML = `<span style="color:#0F6E56;font-family:var(--font-mono)">${name}</span> copied to channel panels`;
+  setTimeout(() => { hint.innerHTML = orig; }, 2000);
+}
+</script>
