@@ -1,14 +1,16 @@
 # ASTRA API Contract
 
-**Version:** 0.2.0  
+**Version:** 0.3.0  
 **Base URL:** `http://localhost:8000`  
-**Last Updated:** February 2025
+**Last Updated:** April 2026
+
+> 中文版：[api-contract.zh.md](./api-contract.zh.md)
 
 ---
 
 > **Who is this for?**
-> - **Frontend Team ** — Sessions, Notes read/edit/export, Telemetry channels, WebSocket subscription
-> - **AI/Data Team ** — POST notes, STT task lifecycle, telemetry latest value
+> - **Frontend Team** — Sessions, Notes read/edit/export, Telemetry channels, WebSocket subscription
+> - **AI/Data Team** — POST notes, STT task lifecycle, telemetry latest value
 
 ---
 
@@ -18,6 +20,8 @@
 - All requests/responses use **JSON** (`Content-Type: application/json`)
 - Session ID (`sid`) is required in the URL path for all session-scoped endpoints
 - A `404` is returned if the session or resource does not exist
+- Browser recording uses `POST /api/sessions/{sid}/stt/upload` — see the
+  Recording Path diagram in `backend/README.md`
 
 ---
 
@@ -43,7 +47,8 @@
   "description": "Testing CADRE rover arm torque limits",
   "status": "active",
   "started_at": "2025-01-26T10:00:00Z",
-  "ended_at": null
+  "ended_at": null,
+  "note_count": 0
 }
 ```
 

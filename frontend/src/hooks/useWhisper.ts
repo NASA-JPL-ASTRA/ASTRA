@@ -1,12 +1,46 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { createSession, endSession } from '../services/api';
+import { createSession, endSession, uploadAudioChunk } from '../services/api';
 import { connectSessionWs, type SessionWsConnection } from '../services/sessionWs';
 import type { BackendNote } from '../types';
 
 const CHUNK_INTERVAL_MS = 3000;
 const TARGET_SAMPLE_RATE = 16000;
 const LEVEL_UPDATE_INTERVAL_MS = 80;
+
+// Force-finalize a sentence if it keeps growing past this many characters
+// without ever hitting terminal punctuation — prevents a single entry from
+// becoming an unbounded wall of text when the speaker never pauses.
+const MAX_SENTENCE_CHARS = 400;
+
+// Detect sentence-ending punctuation (ASCII + CJK), tolerating trailing
+// quotes/brackets/whitespace.
+const SENTENCE_TERMINATOR_RE = /[.!?。！？][\s"')\]]*$/;
+
+function endsSentence(text: string): boolean {
+  return SENTENCE_TERMINATOR_RE.test(text.trim());
+}
+
+function mergeSentenceText(base: string, incoming: string): string {
+  const next = incoming.trim();
+  if (!base) return next;
+  if (!next) return base;
+  return /\s$/.test(base) ? base + next : `${base} ${next}`;
+}
+
+function newSentenceId(): string {
+  return `sent_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildSessionName(now: Date): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  return `REC-${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
 
 /**
  * Downsample Float32 PCM from inputRate to outputRate via linear interpolation.
@@ -38,6 +72,44 @@ function float32ToInt16(float32: Float32Array): Int16Array {
   return int16;
 }
 
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
+
+/**
+ * Wrap raw PCM16 samples in a WAV container so the backend receives a
+ * self-describing audio file.
+ */
+function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcm16.byteLength;
+  const headerSize = 44;
+  const buffer = new ArrayBuffer(headerSize + dataSize);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  new Uint8Array(buffer, headerSize).set(new Uint8Array(pcm16.buffer));
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 /**
  * Real audio capture + transcription hook.
  *
@@ -55,11 +127,14 @@ export function useWhisper() {
     setIsPaused,
     setWsConnected,
     setBackendSessionId,
-    addTranscription,
+    upsertStreamingTranscription,
+    clearTranscriptions,
     updateAudioLevel,
     setRecordingError,
     setSessionStartTime,
-    saveSessionToHistory,
+    selectedSttModel,
+    showSavedToast,
+    dismissSavedToast,
     addLiveNote,
     updateLiveNote,
     removeLiveNote,
@@ -78,19 +153,41 @@ export function useWhisper() {
 
   // ── Connection refs ──
   const wsConnectionRef = useRef<SessionWsConnection | null>(null);
+  const uploadChainRef = useRef<Promise<void>>(Promise.resolve());
+  const sessionNameRef = useRef<string>('');
+  const chunkSequenceRef = useRef(0);
+  const selectedSttModelRef = useRef(selectedSttModel);
 
   const isActiveRef = useRef(false);
 
-  const addTranscriptionRef = useRef(addTranscription);
+  // ── Sentence accumulation refs ──
+  // Transcriptions arrive per 3s chunk, but a spoken sentence usually spans
+  // multiple chunks. We accumulate chunk text client-side into one "live"
+  // entry keyed by a frontend-generated sentence id, and only promote it to
+  // final when we see sentence-terminating punctuation.
+  const sentenceIdRef = useRef<string | null>(null);
+  const sentenceBaseRef = useRef<string>('');
+
+  const backendSessionIdRef = useRef(backendSessionId);
+  const upsertStreamingRef = useRef(upsertStreamingTranscription);
   const addLiveNoteRef = useRef(addLiveNote);
   const updateLiveNoteRef = useRef(updateLiveNote);
   const removeLiveNoteRef = useRef(removeLiveNote);
   useEffect(() => {
-    addTranscriptionRef.current = addTranscription;
+    backendSessionIdRef.current = backendSessionId;
+    upsertStreamingRef.current = upsertStreamingTranscription;
     addLiveNoteRef.current = addLiveNote;
     updateLiveNoteRef.current = updateLiveNote;
     removeLiveNoteRef.current = removeLiveNote;
-  }, [addTranscription, addLiveNote, updateLiveNote, removeLiveNote]);
+    selectedSttModelRef.current = selectedSttModel;
+  }, [
+    backendSessionId,
+    upsertStreamingTranscription,
+    addLiveNote,
+    updateLiveNote,
+    removeLiveNote,
+    selectedSttModel,
+  ]);
 
   // ── Audio level monitoring (real mic via AnalyserNode) ──
 
@@ -119,6 +216,35 @@ export function useWhisper() {
 
   // ── PCM chunk flushing ──
 
+  const enqueueChunkUpload = useCallback((
+    sessionId: string,
+    wavBlob: Blob,
+    durationSeconds: number,
+  ) => {
+    chunkSequenceRef.current += 1;
+    const chunkId = `chunk_${String(chunkSequenceRef.current).padStart(6, '0')}`;
+
+    const uploadTask = async () => {
+      try {
+        await uploadAudioChunk(
+          sessionId,
+          wavBlob,
+          chunkId,
+          durationSeconds,
+          selectedSttModelRef.current,
+        );
+      } catch (err) {
+        console.error('[ASTRA] upload failed:', err);
+      }
+    };
+
+    uploadChainRef.current = uploadChainRef.current
+      .catch(() => {})
+      .then(uploadTask);
+
+    return uploadChainRef.current;
+  }, []);
+
   const flushChunk = useCallback(() => {
     const chunks = pcmBufferRef.current;
     if (chunks.length === 0) return null;
@@ -136,16 +262,23 @@ export function useWhisper() {
     const resampled = downsample(merged, inputRate, TARGET_SAMPLE_RATE);
     const pcm16 = float32ToInt16(resampled);
 
+    const durationSeconds = resampled.length / TARGET_SAMPLE_RATE;
+
     if (import.meta.env.DEV) {
       console.debug(
-        `[ASTRA] audio chunk: ${(resampled.length / TARGET_SAMPLE_RATE).toFixed(1)}s, ` +
+        `[ASTRA] audio chunk: ${durationSeconds.toFixed(1)}s, ` +
           `${pcm16.byteLength} bytes PCM16 @ ${TARGET_SAMPLE_RATE}Hz`,
       );
     }
 
-    // TODO: send pcm16.buffer via /ws/transcribe when the Whisper backend is ready
-    return pcm16;
-  }, []);
+    const sessionId = backendSessionIdRef.current;
+    if (sessionId) {
+      const wavBlob = pcm16ToWavBlob(pcm16, TARGET_SAMPLE_RATE);
+      return enqueueChunkUpload(sessionId, wavBlob, durationSeconds);
+    }
+
+    return null;
+  }, [enqueueChunkUpload]);
 
   // ── Audio pipeline setup / teardown ──
 
@@ -224,18 +357,33 @@ export function useWhisper() {
 
   const startRecording = useCallback(async () => {
     try {
+      const now = new Date();
+      const sessionName = buildSessionName(now);
+
       setRecordingError(null);
-      setSessionStartTime(new Date());
+      setSessionStartTime(now);
       setIsRecording(true);
       setIsPaused(false);
       setWsConnected(false);
       setBackendSessionId(null);
+      clearTranscriptions();
+      clearLiveNotes();
+      dismissSavedToast();
+
+      sentenceIdRef.current = null;
+      sentenceBaseRef.current = '';
+      uploadChainRef.current = Promise.resolve();
+      sessionNameRef.current = sessionName;
+      chunkSequenceRef.current = 0;
 
       // Request real microphone access and set up audio pipeline
       await setupAudio();
 
       // Create backend session + WebSocket connection
-      const session = await createSession('Frontend Live Session');
+      const session = await createSession(
+        sessionName,
+        'Browser microphone recording routed through backend STT.',
+      );
       setBackendSessionId(session.id);
 
       wsConnectionRef.current = connectSessionWs(session.id, {
@@ -245,16 +393,46 @@ export function useWhisper() {
         onMessage: (msg) => {
           const data = msg.data as Record<string, unknown>;
 
-          if (msg.event === 'stt.task.done') {
-            if (typeof data.transcript === 'string' && data.transcript) {
-              addTranscriptionRef.current({
-                id: String(data.id ?? `tr_${Date.now()}`),
-                timestamp: new Date(),
-                speakerId: 'speaker_0',
-                rawText: data.transcript,
-                confidence: 0.9,
-                isFinal: true,
-              });
+          if (import.meta.env.DEV) {
+            console.debug('[ASTRA-WS]', msg.event, data);
+          }
+
+          if (msg.event === 'transcript.chunk.ready') {
+            // Streaming delta from OpenAI for the current 3s chunk. We render
+            // it combined with whatever we've accumulated from previous chunks
+            // in the same (in-progress) sentence, so the typewriter sees the
+            // full running sentence as its target.
+            const transcript =
+              typeof data.transcript === 'string' ? data.transcript : '';
+            if (!transcript) return;
+            if (!sentenceIdRef.current) {
+              sentenceIdRef.current = newSentenceId();
+            }
+            const display = mergeSentenceText(sentenceBaseRef.current, transcript);
+            upsertStreamingRef.current(sentenceIdRef.current, display, false);
+          } else if (msg.event === 'stt.task.done') {
+            // One 3s chunk finished. Append its final text to the sentence
+            // buffer. If the buffer now ends with sentence-terminating
+            // punctuation (or has grown too long), finalize the entry and
+            // start a new sentence for the next chunk. Otherwise keep the
+            // entry open so the next chunk extends it.
+            const transcript =
+              typeof data.transcript === 'string' ? data.transcript : '';
+            if (!transcript) return;
+            if (!sentenceIdRef.current) {
+              sentenceIdRef.current = newSentenceId();
+            }
+            const sid = sentenceIdRef.current;
+            const merged = mergeSentenceText(sentenceBaseRef.current, transcript);
+            const shouldFinalize =
+              endsSentence(merged) || merged.length > MAX_SENTENCE_CHARS;
+            if (shouldFinalize) {
+              upsertStreamingRef.current(sid, merged, true);
+              sentenceIdRef.current = null;
+              sentenceBaseRef.current = '';
+            } else {
+              sentenceBaseRef.current = merged;
+              upsertStreamingRef.current(sid, merged, false);
             }
           } else if (msg.event === 'note.created') {
             addLiveNoteRef.current(data as unknown as BackendNote);
@@ -279,6 +457,8 @@ export function useWhisper() {
       setIsRecording(false);
       setIsPaused(false);
       setWsConnected(false);
+      clearTranscriptions();
+      clearLiveNotes();
       setSessionStartTime(null);
 
       if (err instanceof DOMException && err.name === 'NotAllowedError') {
@@ -305,6 +485,9 @@ export function useWhisper() {
     updateAudioLevel,
     setupAudio,
     teardownAudio,
+    clearTranscriptions,
+    clearLiveNotes,
+    dismissSavedToast,
   ]);
 
   const pauseRecording = useCallback(() => {
@@ -331,14 +514,33 @@ export function useWhisper() {
     isActiveRef.current = false;
 
     // Flush any remaining buffered audio
-    flushChunk();
+    const finalUpload = flushChunk();
+
+    // Finalize any in-progress sentence so it doesn't stay stuck as
+    // "processing" in the UI after the mic is released.
+    if (sentenceIdRef.current && sentenceBaseRef.current) {
+      upsertStreamingRef.current(
+        sentenceIdRef.current,
+        sentenceBaseRef.current,
+        true,
+      );
+    }
+    sentenceIdRef.current = null;
+    sentenceBaseRef.current = '';
 
     // Release microphone and close AudioContext
     teardownAudio();
 
+    if (finalUpload) {
+      await finalUpload.catch(() => {});
+    }
+    await uploadChainRef.current.catch(() => {});
+
+    let finishedSessionName = sessionNameRef.current;
     if (backendSessionId) {
       try {
-        await endSession(backendSessionId);
+        const endedSession = await endSession(backendSessionId);
+        finishedSessionName = endedSession.name;
       } catch {
         // Non-blocking: still stop local UI even if backend call fails.
       }
@@ -353,8 +555,11 @@ export function useWhisper() {
     setIsPaused(false);
     setWsConnected(false);
 
-    saveSessionToHistory();
+    clearTranscriptions();
     clearLiveNotes();
+    if (finishedSessionName) {
+      showSavedToast(finishedSessionName);
+    }
     setSessionStartTime(null);
   }, [
     backendSessionId,
@@ -363,8 +568,9 @@ export function useWhisper() {
     setIsRecording,
     setIsPaused,
     setWsConnected,
-    saveSessionToHistory,
+    clearTranscriptions,
     clearLiveNotes,
+    showSavedToast,
     setSessionStartTime,
     teardownAudio,
     flushChunk,

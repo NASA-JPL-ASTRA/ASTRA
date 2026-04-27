@@ -4,15 +4,21 @@ import {
   Calendar,
   Clock,
   FileText,
-  Users,
   Download,
   Search,
-  Trash2,
   ChevronRight,
   MessageSquareText,
 } from 'lucide-react';
-import { listSessions } from '../services/api';
-import type { Session } from '../types';
+import {
+  exportNotes,
+  listSessions,
+  type BackendSession,
+} from '../services/api';
+
+interface HistorySession extends BackendSession {
+  startTime: Date;
+  endTime?: Date;
+}
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString('en-US', {
@@ -33,45 +39,9 @@ function formatDuration(start: Date, end?: Date): string {
   return `${minutes}m`;
 }
 
-function exportSession(session: Session) {
-  const lines: string[] = [];
-  lines.push(`# ${session.name}`);
-  lines.push(`# ${session.description}`);
-  lines.push(`# Start: ${session.startTime.toISOString()}`);
-  if (session.endTime) lines.push(`# End: ${session.endTime.toISOString()}`);
-  lines.push(`# Testbed: ${session.testbed}`);
-  lines.push(`# Entries: ${session.logCount}`);
-  lines.push('');
-
-  if (session.transcriptions && session.transcriptions.length > 0) {
-    lines.push('Timestamp | Speaker | Confidence | Text');
-    lines.push('----------|---------|------------|-----');
-    for (const t of session.transcriptions) {
-      const time = new Date(t.timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-      const conf = `${(t.confidence * 100).toFixed(0)}%`;
-      lines.push(`${time} | ${t.speakerId} | ${conf} | ${t.rawText}`);
-    }
-  } else {
-    lines.push('(No transcription data stored for this session)');
-  }
-
-  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${session.name}.txt`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export default function HistoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -83,18 +53,10 @@ export default function HistoryPage() {
         const apiSessions = await listSessions();
         if (cancelled) return;
 
-        const mapped: Session[] = apiSessions.map((s) => ({
-          id: s.id,
-          name: s.name,
-          description: s.description ?? 'No description',
+        const mapped: HistorySession[] = apiSessions.map((s) => ({
+          ...s,
           startTime: new Date(s.started_at),
           endTime: s.ended_at ? new Date(s.ended_at) : undefined,
-          status: s.status === 'ended' ? 'completed' : 'active',
-          operators: [],
-          logCount: 0,
-          telemetryStreams: 0,
-          testbed: 'Backend Session',
-          transcriptions: [],
         }));
 
         setSessions(mapped);
@@ -116,17 +78,24 @@ export default function HistoryPage() {
     (s) =>
       searchQuery === '' ||
       s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.testbed.toLowerCase().includes(searchQuery.toLowerCase()),
+      (s.description ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.id.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const handleDelete = (id: string) => {
-    if (deletingId === id) {
-      setSessions((prev) => prev.filter((sess) => sess.id !== id));
-      setDeletingId(null);
-    } else {
-      setDeletingId(id);
-      setTimeout(() => setDeletingId(null), 3000);
+  const totalNotes = filteredSessions.reduce((sum, session) => sum + session.note_count, 0);
+
+  const handleExport = async (session: HistorySession) => {
+    try {
+      const text = await exportNotes(session.id, 'markdown');
+      const blob = new Blob([text], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${session.name}-notes.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Failed to export notes');
     }
   };
 
@@ -142,7 +111,7 @@ export default function HistoryPage() {
         </div>
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <MessageSquareText className="w-4 h-4" />
-          {filteredSessions.length} note{filteredSessions.length !== 1 ? 's' : ''}
+          {totalNotes} note{totalNotes !== 1 ? 's' : ''}
         </div>
       </div>
 
@@ -153,7 +122,7 @@ export default function HistoryPage() {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by name, description, or testbed..."
+          placeholder="Search by name, description, or session id..."
           className="w-full bg-space-card border border-space-border rounded-lg pl-10 pr-4 py-2.5 text-sm text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-cyan/50 transition-all"
         />
       </div>
@@ -211,23 +180,14 @@ export default function HistoryPage() {
                       </div>
                       <div className="flex items-center gap-1.5">
                         <FileText className="w-3.5 h-3.5" />
-                        {session.logCount} entries
+                        {session.note_count} note{session.note_count !== 1 ? 's' : ''}
                       </div>
-                      {session.operators.length > 0 && (
-                        <div className="flex items-center gap-1.5">
-                          <Users className="w-3.5 h-3.5" />
-                          {session.operators.length} operators
-                        </div>
-                      )}
-                      {session.transcriptions && session.transcriptions.length > 0 && (
-                        <span className="text-accent-green font-medium">Has transcription data</span>
-                      )}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0 ml-4">
                     <span className="text-xs text-text-muted px-3 py-1.5 rounded-lg bg-space-card border border-space-border">
-                      {session.testbed}
+                      {session.id}
                     </span>
                     <ChevronRight className="w-5 h-5 text-text-muted group-hover:text-accent-cyan transition-colors" />
                   </div>
@@ -238,26 +198,12 @@ export default function HistoryPage() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      exportSession(session);
+                      void handleExport(session);
                     }}
                     className="p-2 rounded-lg text-text-muted hover:text-accent-cyan hover:bg-accent-cyan/10 transition-all"
-                    title="Export as text file"
+                    title="Export backend notes as Markdown"
                   >
                     <Download className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(session.id);
-                    }}
-                    className={`p-2 rounded-lg transition-all ${
-                      deletingId === session.id
-                        ? 'text-accent-red bg-accent-red/15'
-                        : 'text-text-muted hover:text-accent-red hover:bg-accent-red/10'
-                    }`}
-                    title={deletingId === session.id ? 'Click again to confirm delete' : 'Delete'}
-                  >
-                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>

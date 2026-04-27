@@ -17,6 +17,11 @@ import {
   Clock,
   Palette,
 } from 'lucide-react';
+import { useStore } from '../store/useStore';
+import {
+  STT_MODEL_OPTIONS,
+  getSttModelLabel,
+} from '../config/sttModels';
 
 interface SettingGroup {
   id: string;
@@ -54,6 +59,7 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void 
 
 export default function SettingsPage() {
   const [activeGroup, setActiveGroup] = useState('user');
+  const { selectedSttModel, setSelectedSttModel } = useStore();
 
   // User state
   const [isLoggedIn, setIsLoggedIn] = useState(true);
@@ -73,7 +79,6 @@ export default function SettingsPage() {
   const [noiseSuppression, setNoiseSuppression] = useState(true);
   const [multiSpeaker, setMultiSpeaker] = useState(true);
   const [voiceCommands, setVoiceCommands] = useState(true);
-  const [sttModel, setSttModel] = useState('whisper-large-v3');
 
   // AI state
   const [llmModel, setLlmModel] = useState('gpt-4');
@@ -349,15 +354,26 @@ export default function SettingsPage() {
                   <p className="text-xs text-text-muted mt-0.5">Select the STT engine for transcription</p>
                 </div>
                 <select
-                  value={sttModel}
-                  onChange={(e) => setSttModel(e.target.value)}
+                  value={selectedSttModel}
+                  onChange={(e) => setSelectedSttModel(e.target.value)}
                   className="bg-space-card border border-space-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-cyan/50"
                 >
-                  <option value="whisper-large-v3">OpenAI Whisper Large v3</option>
-                  <option value="whisper-medium">OpenAI Whisper Medium</option>
-                  <option value="whisper-small">OpenAI Whisper Small</option>
-                  <option value="deepgram-nova">Deepgram Nova-2</option>
+                  {STT_MODEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
+              </div>
+
+              <div className="rounded-lg border border-space-border bg-space-card/60 px-4 py-3">
+                <p className="text-xs font-medium text-text-primary">
+                  Active model: {getSttModelLabel(selectedSttModel)}
+                </p>
+                <p className="text-xs text-text-muted mt-1">
+                  The selected model is applied immediately to new dictation uploads and is
+                  stored locally in this browser.
+                </p>
               </div>
 
               <div className="flex items-center justify-between">

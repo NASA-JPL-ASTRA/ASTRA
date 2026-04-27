@@ -10,6 +10,7 @@ export interface BackendSession {
   status: 'active' | 'ended';
   started_at: string;
   ended_at: string | null;
+  note_count: number;
 }
 
 // ── Generic request helper ──
@@ -131,4 +132,33 @@ export function exportNotes(
   return requestText(`/sessions/${sessionId}/notes/export?format=${format}`, {
     method: 'GET',
   });
+}
+
+// ── STT Upload ──
+
+export async function uploadAudioChunk(
+  sessionId: string,
+  wavBlob: Blob,
+  chunkId?: string,
+  durationSeconds?: number,
+  model?: string,
+): Promise<unknown> {
+  const form = new FormData();
+  form.append('file', wavBlob, `${chunkId ?? 'chunk'}.wav`);
+  if (chunkId) form.append('audio_chunk_id', chunkId);
+  if (durationSeconds !== undefined)
+    form.append('duration_seconds', String(durationSeconds));
+  if (model) form.append('model', model);
+
+  const response = await fetch(
+    `${API_URL}/sessions/${sessionId}/stt/upload`,
+    { method: 'POST', body: form },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`STT upload ${response.status}: ${body || response.statusText}`);
+  }
+
+  return response.json();
 }

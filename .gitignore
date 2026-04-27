@@ -1,28 +1,74 @@
-# Python
+# ─────────── OS ───────────
+.DS_Store
+Thumbs.db
+
+# ─────────── IDE / Editor ───────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─────────── Python (backend) ───────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 venv/
+.venv/
 env/
+.eggs/
+*.egg-info/
+
+# Test / type-check / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ─────────── Node / Frontend ───────────
+node_modules/
+dist/
+build/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─────────── Env / Secrets ───────────
+# Ignore all env files by default, but keep example templates tracked
 .env
+.env.*
+!.env.example
+!.env.sample
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Project specific
+# ─────────── Databases (when switching off in-memory) ───────────
 *.db
+*.sqlite
 *.sqlite3
+*.db-journal
+backend/data/
 
-# Smoke test outputs
+# ─────────── Audio / media (录音调试产物) ───────────
+*.wav
+*.mp3
+*.m4a
+*.webm
+*.ogg
+backend/uploads/
+backend/audio_chunks/
+
+# ─────────── Project-specific ───────────
 smoke_test_export.md
 smoke_test_export.json
-.DS_Store
+
+# ─────────── AI / Agent tooling ───────────
+.cursor/
+.aider*
+.claude/

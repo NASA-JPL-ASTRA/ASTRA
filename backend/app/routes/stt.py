@@ -16,23 +16,104 @@ Endpoints:
 - PUT  /api/sessions/{sid}/stt/tasks/{tid}   - Update task (done/failed)
 """
 
-from fastapi import APIRouter, HTTPException
+import logging
+import time
+
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 import uuid
 
 from app.schemas import STTTaskCreate, STTTaskUpdate, STTTaskResponse
-from app.database import stt_tasks_db, get_session, get_stt_tasks_by_session
+from app.database import stt_tasks_db, notes_db, get_session, get_stt_tasks_by_session
 from app.ws_manager import (
     broadcast, broadcast_error,
-    EVENT_STT_TASK_CREATED, EVENT_STT_TASK_DONE,
+    EVENT_STT_TASK_CREATED, EVENT_STT_TASK_DONE, EVENT_NOTE_CREATED, EVENT_STT_CHUNK_READY,
+)
+from app.services.openai_stt import (
+    SUPPORTED_STT_MODELS,
+    OpenAIStreamingTranscriptionService,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+stt_service = OpenAIStreamingTranscriptionService()
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _create_auto_note(sid: str, transcript: str) -> Optional[dict]:
+    cleaned = transcript.strip()
+    if not cleaned:
+        return None
+
+    note_id = f"note_{uuid.uuid4().hex[:8]}"
+    now = utcnow()
+    new_note = {
+        "id": note_id,
+        "session_id": sid,
+        "timestamp": now,
+        "speaker": None,
+        "content": cleaned,
+        "type": "observation",
+        "tags": ["auto-transcription"],
+        "telemetry_snapshot": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    notes_db[note_id] = new_note
+    await broadcast(sid, EVENT_NOTE_CREATED, new_note)
+    return new_note
+
+
+async def _transcribe_uploaded_audio(
+    *,
+    sid: str,
+    task: dict,
+    file_name: str,
+    file_content: bytes,
+    content_type: str,
+    model: str,
+) -> None:
+    transcript = ""
+
+    try:
+        async for event in stt_service.stream_transcription(
+            file_name=file_name,
+            file_bytes=file_content,
+            content_type=content_type,
+            model=model,
+        ):
+            if event.type == "transcript.text.delta" and event.delta:
+                transcript += event.delta
+                await broadcast(sid, EVENT_STT_CHUNK_READY, {
+                    "id": task["id"],
+                    "audio_chunk_id": task["audio_chunk_id"],
+                    "delta": event.delta,
+                    "transcript": transcript,
+                    "is_final": False,
+                })
+            elif event.type == "transcript.text.done" and event.text:
+                transcript = event.text
+
+        task["status"] = "done"
+        task["transcript"] = transcript.strip() or None
+        task["error"] = None
+        task["updated_at"] = utcnow()
+
+        await broadcast(sid, EVENT_STT_TASK_DONE, task)
+
+        if task["transcript"]:
+            await _create_auto_note(sid, task["transcript"])
+    except Exception as e:
+        logger.exception("OpenAI transcription failed for task %s", task["id"])
+        task["status"] = "failed"
+        task["error"] = str(e)
+        task["updated_at"] = utcnow()
+        await broadcast_error(sid, f"OpenAI transcription failed: {e}", source="stt")
 
 
 @router.post("/{sid}/stt/tasks", response_model=STTTaskResponse, status_code=201)
@@ -124,3 +205,71 @@ async def update_stt_task(sid: str, tid: str, update: STTTaskUpdate):
         await broadcast_error(sid, error_msg, source="stt")
 
     return task
+
+
+# ─────────────────────────────────────────────────────────────
+# Upload audio → transcribe with OpenAI and broadcast incremental output
+# ─────────────────────────────────────────────────────────────
+
+@router.post("/{sid}/stt/upload")
+async def upload_audio(
+    sid: str,
+    file: UploadFile = File(...),
+    audio_chunk_id: Optional[str] = Form(None),
+    duration_seconds: Optional[float] = Form(None),
+    model: Optional[str] = Form(None),
+):
+    """
+    Receive an audio file from the frontend, transcribe it with OpenAI,
+    and stream transcript deltas back through the session WebSocket.
+    """
+    if not get_session(sid):
+        raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+
+    selected_model = (model or stt_service.model).strip()
+    if selected_model not in SUPPORTED_STT_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported STT model '{selected_model}'. "
+                f"Supported models: {', '.join(sorted(SUPPORTED_STT_MODELS))}"
+            ),
+        )
+
+    task_id = f"stt_{uuid.uuid4().hex[:8]}"
+    now = utcnow()
+    chunk_id = audio_chunk_id or f"chunk_{int(time.time() * 1000)}"
+
+    new_task = {
+        "id":               task_id,
+        "session_id":       sid,
+        "audio_chunk_id":   chunk_id,
+        "duration_seconds": duration_seconds,
+        "model":            selected_model,
+        "status":           "pending",
+        "transcript":       None,
+        "error":            None,
+        "created_at":       now,
+        "updated_at":       now,
+    }
+    stt_tasks_db[task_id] = new_task
+    await broadcast(sid, EVENT_STT_TASK_CREATED, new_task)
+
+    file_content = await file.read()
+    try:
+        await _transcribe_uploaded_audio(
+            sid=sid,
+            task=new_task,
+            file_name=file.filename or "chunk.wav",
+            file_content=file_content,
+            content_type=file.content_type or "audio/wav",
+            model=selected_model,
+        )
+    except Exception as e:
+        logger.error("STT upload failed for task %s: %s", task_id, e)
+        new_task["status"] = "failed"
+        new_task["error"] = str(e)
+        new_task["updated_at"] = utcnow()
+        await broadcast_error(sid, f"STT upload failed: {e}", source="stt")
+
+    return new_task

@@ -43,6 +43,7 @@ class SessionResponse(BaseModel):
     status:      SessionStatus
     started_at:  datetime
     ended_at:    Optional[datetime]
+    note_count:  int = 0
 
 
 # ============ Note Schemas ============
@@ -125,6 +126,7 @@ class STTTaskResponse(BaseModel):
     session_id:       str
     audio_chunk_id:   str
     duration_seconds: Optional[float]
+    model:            Optional[str] = None
     status:           str
     transcript:       Optional[str]
     error:            Optional[str]

@@ -3,6 +3,8 @@ function getEnv(key: string): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-export const API_URL = getEnv('VITE_API_URL') ?? 'http://localhost:8000/api';
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+export const API_URL = getEnv('VITE_API_URL') ?? '/api';
 export const SESSION_WS_URL =
-  getEnv('VITE_SESSION_WS_URL') ?? 'ws://localhost:8000/ws/sessions';
+  getEnv('VITE_SESSION_WS_URL') ?? `${wsProtocol}//${window.location.host}/ws/sessions`;

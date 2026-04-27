@@ -49,9 +49,9 @@ export default function VoiceControls() {
                 key={i}
                 className="w-[3px] bg-accent-cyan/60 rounded-full animate-pulse"
                 style={{
-                  height: `${Math.random() * 24 + 4}px`,
+                  height: `${((i * 11) % 24) + 4}px`,
                   animationDelay: `${i * 50}ms`,
-                  animationDuration: `${300 + Math.random() * 500}ms`,
+                  animationDuration: `${300 + ((i * 73) % 500)}ms`,
                 }}
               />
             ))}

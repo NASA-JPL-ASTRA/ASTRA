@@ -9,10 +9,15 @@ import {
   CheckCircle2,
   X,
   Clock,
+  Cpu,
 } from 'lucide-react';
 import TranscriptionPanel from '../components/session/TranscriptionPanel';
 import { useWhisper } from '../hooks/useWhisper';
 import { useStore } from '../store/useStore';
+import {
+  STT_MODEL_OPTIONS,
+  getSttModelLabel,
+} from '../config/sttModels';
 
 export default function SessionPage() {
   const {
@@ -29,6 +34,8 @@ export default function SessionPage() {
     savedSessionToast,
     dismissSavedToast,
     sessionStartTime,
+    selectedSttModel,
+    setSelectedSttModel,
   } = useStore();
   const navigate = useNavigate();
 
@@ -41,16 +48,16 @@ export default function SessionPage() {
   }, [savedSessionToast, dismissSavedToast]);
 
   // Tick every second to update elapsed timer in real-time
-  const [, setTick] = useState(0);
+  const [nowTs, setNowTs] = useState(() => Date.now());
   useEffect(() => {
     if (isRecording) {
-      const timer = setInterval(() => setTick((t) => t + 1), 1000);
+      const timer = setInterval(() => setNowTs(Date.now()), 1000);
       return () => clearInterval(timer);
     }
   }, [isRecording]);
 
   const elapsed = sessionStartTime
-    ? Math.floor((Date.now() - sessionStartTime.getTime()) / 1000)
+    ? Math.floor((nowTs - sessionStartTime.getTime()) / 1000)
     : 0;
   const elapsedStr = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
 
@@ -162,6 +169,21 @@ export default function SessionPage() {
 
           {/* Right: info */}
           <div className="flex items-center gap-4 text-xs text-text-muted">
+            <div className="flex items-center gap-2 rounded-lg border border-space-border bg-space-card px-2.5 py-1.5">
+              <Cpu className="w-3.5 h-3.5 text-accent-cyan" />
+              <select
+                value={selectedSttModel}
+                onChange={(e) => setSelectedSttModel(e.target.value)}
+                className="bg-transparent text-xs text-text-primary focus:outline-none"
+                aria-label="Speech-to-text model"
+              >
+                {STT_MODEL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             {isRecording && (
               <div className="flex items-center gap-2">
                 {isPaused ? (
@@ -179,7 +201,7 @@ export default function SessionPage() {
               </div>
             )}
             <span className="font-mono">
-              Whisper large-v3 &middot; 16kHz mono &middot; 3s chunks
+              {getSttModelLabel(selectedSttModel)} &middot; 16kHz mono &middot; 3s chunks
             </span>
           </div>
         </div>

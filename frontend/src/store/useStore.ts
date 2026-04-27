@@ -1,10 +1,11 @@
 import { create } from 'zustand';
-import type { Session, LogEntry, TelemetryStream, SavedTranscription, BackendNote } from '../types';
+import type { Session, LogEntry, TelemetryStream, BackendNote } from '../types';
 import {
   sessions as mockSessions,
   logEntries as mockLogs,
   telemetryStreams as mockTelemetry,
 } from '../mock/data';
+import { DEFAULT_STT_MODEL, isSupportedSttModel } from '../config/sttModels';
 
 export interface LiveTranscription {
   id: string;
@@ -30,6 +31,7 @@ interface AppState {
   audioLevel: number;
   recordingError: string | null;
   sessionStartTime: Date | null;
+  selectedSttModel: string;
 
   // WebSocket
   wsConnected: boolean;
@@ -57,6 +59,7 @@ interface AppState {
   setWsConnected: (connected: boolean) => void;
   addTranscription: (entry: LiveTranscription) => void;
   updateLiveTranscription: (id: string, newText: string) => void;
+  upsertStreamingTranscription: (id: string, transcript: string, isFinal: boolean) => void;
   clearTranscriptions: () => void;
   addLiveNote: (note: BackendNote) => void;
   updateLiveNote: (noteId: string, note: BackendNote) => void;
@@ -65,12 +68,21 @@ interface AppState {
   updateAudioLevel: (level: number) => void;
   setRecordingError: (error: string | null) => void;
   setSessionStartTime: (time: Date | null) => void;
-  saveSessionToHistory: () => void;
+  setSelectedSttModel: (model: string) => void;
+  showSavedToast: (label: string) => void;
   dismissSavedToast: () => void;
   deleteSession: (id: string) => void;
   getSessionById: (id: string) => Session | undefined;
   updateSession: (id: string, updates: { name?: string; description?: string; summary?: string }) => void;
   updateSessionTranscription: (sessionId: string, transcriptionId: string, newText: string) => void;
+}
+
+const STT_MODEL_STORAGE_KEY = 'astra.sttModel';
+
+function loadInitialSttModel(): string {
+  if (typeof window === 'undefined') return DEFAULT_STT_MODEL;
+  const stored = window.localStorage.getItem(STT_MODEL_STORAGE_KEY);
+  return stored && isSupportedSttModel(stored) ? stored : DEFAULT_STT_MODEL;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -86,6 +98,7 @@ export const useStore = create<AppState>((set, get) => ({
   audioLevel: 0,
   recordingError: null,
   sessionStartTime: null,
+  selectedSttModel: loadInitialSttModel(),
 
   wsConnected: false,
 
@@ -118,6 +131,30 @@ export const useStore = create<AppState>((set, get) => ({
         t.id === id ? { ...t, rawText: newText } : t
       ),
     })),
+  upsertStreamingTranscription: (id, transcript, isFinal) =>
+    set((s) => {
+      const exists = s.transcriptions.some((t) => t.id === id);
+      if (exists) {
+        return {
+          transcriptions: s.transcriptions.map((t) =>
+            t.id === id ? { ...t, rawText: transcript, isFinal } : t
+          ),
+        };
+      }
+      return {
+        transcriptions: [
+          ...s.transcriptions,
+          {
+            id,
+            timestamp: new Date(),
+            speakerId: 'speaker_0',
+            rawText: transcript,
+            confidence: 0.9,
+            isFinal,
+          },
+        ],
+      };
+    }),
   clearTranscriptions: () => set({ transcriptions: [] }),
   addLiveNote: (note) =>
     set((s) => ({ liveNotes: [...s.liveNotes, note] })),
@@ -133,46 +170,14 @@ export const useStore = create<AppState>((set, get) => ({
   updateAudioLevel: (level) => set({ audioLevel: level }),
   setRecordingError: (error) => set({ recordingError: error }),
   setSessionStartTime: (time) => set({ sessionStartTime: time }),
-
-  saveSessionToHistory: () => {
-    const state = get();
-    if (state.transcriptions.length === 0) return;
-
-    const now = new Date();
-    const startTime = state.sessionStartTime || state.transcriptions[0].timestamp;
-    const sessionId = `sess_${Date.now()}`;
-    const sessionName = `REC-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-
-    const savedTranscriptions: SavedTranscription[] = state.transcriptions.map((t) => ({
-      id: t.id,
-      timestamp: t.timestamp.toISOString(),
-      speakerId: t.speakerId,
-      rawText: t.rawText,
-      confidence: t.confidence,
-      isFinal: t.isFinal,
-    }));
-
-    const newSession: Session = {
-      id: sessionId,
-      name: sessionName,
-      description: `Auto-saved session with ${state.transcriptions.length} transcription entries`,
-      startTime,
-      endTime: now,
-      status: 'completed',
-      operators: [],
-      logCount: state.transcriptions.length,
-      telemetryStreams: 0,
-      testbed: 'Active Testbed',
-      transcriptions: savedTranscriptions,
-    };
-
-    set((s) => ({
-      sessions: [newSession, ...s.sessions],
-      savedSessionToast: sessionName,
-      transcriptions: [],
-      sessionStartTime: null,
-    }));
+  setSelectedSttModel: (model) => {
+    if (!isSupportedSttModel(model)) return;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(STT_MODEL_STORAGE_KEY, model);
+    }
+    set({ selectedSttModel: model });
   },
+  showSavedToast: (label) => set({ savedSessionToast: label }),
 
   dismissSavedToast: () => set({ savedSessionToast: null }),
 

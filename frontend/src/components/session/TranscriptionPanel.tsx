@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import type { LiveTranscription } from '../../store/useStore';
+import { getSttModelLabel } from '../../config/sttModels';
 
 /* ─── Speaker color mapping ─── */
 const SPEAKER_COLORS = [
@@ -48,11 +49,12 @@ function AudioVisualizer({ level, isActive }: { level: number; isActive: boolean
   return (
     <div className="flex items-end gap-[2px] h-10">
       {Array.from({ length: bars }).map((_, i) => {
+        const shimmer = ((i * 17) % 7) / 100;
         const barLevel = isActive
           ? Math.max(
               0.05,
               level * (0.4 + 0.6 * Math.sin((i / bars) * Math.PI)) +
-                Math.random() * 0.08
+                shimmer
             )
           : 0.05;
         return (
@@ -70,6 +72,58 @@ function AudioVisualizer({ level, isActive }: { level: number; isActive: boolean
       })}
     </div>
   );
+}
+
+/* ─── Typewriter animation (word-by-word reveal) ─── */
+// Animates a local "displayed" string toward `target`, revealing ONE WORD at a
+// time at a fixed cadence. A single persistent interval runs for the lifetime
+// of the row; new deltas (target updates) just update `targetRef`, and the
+// interval keeps walking forward until it catches up.
+//
+// This deliberately ignores how fast deltas arrive from the backend: even if
+// OpenAI bursts 10 tokens in 300 ms, the user still sees one word pop up every
+// WORD_INTERVAL_MS, producing a smooth "words appearing as I speak" feel.
+const WORD_INTERVAL_MS = 90;
+
+function findNextWordBoundary(text: string, fromIndex: number): number {
+  let i = fromIndex;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  while (i < text.length && !/\s/.test(text[i])) i++;
+  return i;
+}
+
+function useTypewriter(target: string, isFinal: boolean): string {
+  const [display, setDisplay] = useState(() => (isFinal ? target : ''));
+  const displayRef = useRef(display);
+  const targetRef = useRef(target);
+
+  useEffect(() => {
+    targetRef.current = target;
+  }, [target]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const latestTarget = targetRef.current;
+      const current = displayRef.current;
+
+      if (current === latestTarget) return;
+
+      if (!latestTarget.startsWith(current)) {
+        displayRef.current = latestTarget;
+        setDisplay(latestTarget);
+        return;
+      }
+
+      const nextLen = findNextWordBoundary(latestTarget, current.length);
+      const next = latestTarget.slice(0, nextLen);
+      displayRef.current = next;
+      setDisplay(next);
+    }, WORD_INTERVAL_MS);
+
+    return () => window.clearInterval(id);
+  }, []);
+
+  return display;
 }
 
 /* ─── Single transcription entry (with inline editing) ─── */
@@ -95,6 +149,8 @@ function TranscriptionEntryRow({
   onCancel: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const displayText = useTypewriter(entry.rawText, entry.isFinal);
+  const isTyping = displayText !== entry.rawText || !entry.isFinal;
 
   useEffect(() => {
     if (isEditing && textareaRef.current) {
@@ -124,7 +180,7 @@ function TranscriptionEntryRow({
             <span className="text-[11px] text-accent-cyan/70 font-mono bg-accent-cyan/5 px-1.5 py-0.5 rounded">
               {elapsedStr}
             </span>
-            {!entry.isFinal && (
+            {isTyping && (
               <span className="flex items-center gap-1 text-[10px] text-accent-amber">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 processing
@@ -171,13 +227,20 @@ function TranscriptionEntryRow({
             </div>
           ) : (
             <p
-              onClick={onStartEdit}
-              className={`text-[15px] leading-relaxed cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-accent-cyan/5 transition-colors group/text ${
-                entry.isFinal ? 'text-text-primary' : 'text-text-secondary italic'
+              onClick={entry.isFinal && !isTyping ? onStartEdit : undefined}
+              className={`text-[15px] leading-relaxed rounded px-1 -mx-1 py-0.5 transition-colors group/text ${
+                entry.isFinal && !isTyping
+                  ? 'text-text-primary cursor-pointer hover:bg-accent-cyan/5'
+                  : 'text-text-secondary italic'
               }`}
             >
-              {entry.rawText}
-              <Pencil className="w-3 h-3 text-text-muted opacity-0 group-hover/text:opacity-60 inline ml-1.5 transition-opacity" />
+              {displayText}
+              {isTyping && (
+                <span className="inline-block w-[2px] h-3.5 bg-accent-cyan/70 ml-0.5 align-middle animate-pulse" />
+              )}
+              {entry.isFinal && !isTyping && (
+                <Pencil className="w-3 h-3 text-text-muted opacity-0 group-hover/text:opacity-60 inline ml-1.5 transition-opacity" />
+              )}
             </p>
           )}
 
@@ -222,6 +285,7 @@ export default function TranscriptionPanel() {
     wsConnected,
     audioLevel,
     sessionStartTime,
+    selectedSttModel,
     updateLiveTranscription,
   } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -334,6 +398,12 @@ export default function TranscriptionPanel() {
           <div className="flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5" />
             <span className="font-mono">{transcriptions.length} entries</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-text-muted">Model</span>
+            <span className="font-mono text-text-primary">
+              {getSttModelLabel(selectedSttModel)}
+            </span>
           </div>
           {transcriptions.length > 0 && (
             <span className="text-[10px] text-text-muted ml-auto">Click text to edit</span>

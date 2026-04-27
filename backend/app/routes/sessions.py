@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import uuid
 
 from app.schemas import SessionCreate, SessionUpdate, SessionResponse, SessionStatus
-from app.database import sessions_db, get_session
+from app.database import sessions_db, get_session, count_notes_by_session
 
 router = APIRouter()
 
@@ -23,6 +23,14 @@ router = APIRouter()
 def utcnow() -> datetime:
     """Return current UTC time as timezone-aware datetime."""
     return datetime.now(timezone.utc)
+
+
+def serialize_session(session: dict) -> dict:
+    """Attach computed fields so every session response shares one source of truth."""
+    return {
+        **session,
+        "note_count": count_notes_by_session(session["id"]),
+    }
 
 
 @router.post("", response_model=SessionResponse)
@@ -43,7 +51,7 @@ def create_session(session: SessionCreate):
     }
 
     sessions_db[session_id] = new_session
-    return new_session
+    return serialize_session(new_session)
 
 
 @router.get("", response_model=List[SessionResponse])
@@ -57,7 +65,7 @@ def list_sessions():
         key=lambda x: x["started_at"],
         reverse=True,
     )
-    return sessions
+    return [serialize_session(session) for session in sessions]
 
 
 @router.get("/{sid}", response_model=SessionResponse)
@@ -69,7 +77,7 @@ def get_session_by_id(sid: str):
     session = get_session(sid)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
-    return session
+    return serialize_session(session)
 
 
 @router.patch("/{sid}", response_model=SessionResponse)
@@ -91,4 +99,4 @@ def update_session(sid: str, update: SessionUpdate):
         if update.status == SessionStatus.ended:
             session["ended_at"] = utcnow()
 
-    return session
+    return serialize_session(session)

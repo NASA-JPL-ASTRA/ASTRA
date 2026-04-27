@@ -4,7 +4,6 @@ For development/testing - will be replaced with PostgreSQL later
 """
 
 from typing import Dict, List, Any
-from datetime import datetime
 
 # ============ In-Memory Storage ============
 
@@ -25,6 +24,10 @@ def get_session(session_id: str) -> dict | None:
 
 def get_notes_by_session(session_id: str) -> List[dict]:
     return [n for n in notes_db.values() if n["session_id"] == session_id]
+
+
+def count_notes_by_session(session_id: str) -> int:
+    return sum(1 for note in notes_db.values() if note["session_id"] == session_id)
 
 
 def get_telemetry_by_session(session_id: str) -> List[dict]:
