@@ -8,10 +8,29 @@ NASA JPL Testbed Recording and Analysis System
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import sessions, notes, telemetry, websocket, stt
+
+
+def get_cors_origins() -> list[str]:
+    default_origins = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "https://astra-git-main-volcano-mites-projects.vercel.app",
+        "https://astra-qtlz6uxdg-volcano-mites-projects.vercel.app",
+    ]
+    extra_origins = [
+        origin.strip()
+        for origin in os.getenv("BACKEND_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    return list(dict.fromkeys(default_origins + extra_origins))
 
 app = FastAPI(
     title="ASTRA Backend",
@@ -21,12 +40,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
