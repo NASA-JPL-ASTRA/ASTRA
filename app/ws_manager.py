@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # ============ Event Type Constants ============
 EVENT_NOTE_CREATED     = "note.created"
 EVENT_NOTE_UPDATED     = "note.updated"
+EVENT_NOTE_APPENDED    = "note.appended"
 EVENT_NOTE_DELETED     = "note.deleted"
 
 EVENT_STT_TASK_CREATED = "stt.task.created"

@@ -33,3 +33,8 @@ def get_telemetry_by_session(session_id: str) -> List[dict]:
 
 def get_stt_tasks_by_session(session_id: str) -> List[dict]:   # NEW
     return [t for t in stt_tasks_db.values() if t["session_id"] == session_id]
+
+
+def count_notes_by_session(session_id: str) -> int:
+    """Count notes in a session (for session response serialization)."""
+    return sum(1 for n in notes_db.values() if n["session_id"] == session_id)

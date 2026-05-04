@@ -1,5 +1,10 @@
 """
 Pydantic Schemas - API request/response formats
+
+v0.3.0 — Note types updated per sponsor wk14 feedback:
+  detail  = distilled play-by-play (default, replaces old "observation")
+  anomaly = operator-triggered issues, supports append
+  summary = generated once at session end
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,9 +21,15 @@ class SessionStatus(str, Enum):
 
 
 class NoteType(str, Enum):
-    observation = "observation"
-    command     = "command"
-    system      = "system"
+    """
+    Sponsor-defined note categories (wk14):
+    - detail:  real-time play-by-play, LLM decides append vs new bullet
+    - anomaly: operator says "this is an anomaly", supports append over time
+    - summary: LLM generates once when session ends
+    """
+    detail  = "detail"
+    anomaly = "anomaly"
+    summary = "summary"
 
 
 # ============ Session Schemas ============
@@ -43,6 +54,7 @@ class SessionResponse(BaseModel):
     status:      SessionStatus
     started_at:  datetime
     ended_at:    Optional[datetime]
+    note_count:  int = 0
 
 
 # ============ Note Schemas ============
@@ -51,16 +63,28 @@ class NoteCreate(BaseModel):
     timestamp:          datetime
     speaker:            Optional[str]            = None
     content:            str
-    type:               NoteType                 = NoteType.observation
+    type:               NoteType                 = NoteType.detail
     tags:               List[str]                = Field(default_factory=list)
     telemetry_snapshot: Optional[Dict[str, Any]] = None
 
 
 class NoteUpdate(BaseModel):
+    """Full field replacement — used by Frontend for operator corrections."""
     content: Optional[str]       = None
     speaker: Optional[str]       = None
     type:    Optional[NoteType]  = None
     tags:    Optional[List[str]] = None
+
+
+class NoteAppend(BaseModel):
+    """
+    Append content to an existing note — used by AI Module for anomaly updates.
+    When the same anomaly is observed again later, AI appends new observations
+    instead of creating a duplicate note.
+    """
+    append_content:     str
+    timestamp:          Optional[datetime]       = None
+    telemetry_snapshot: Optional[Dict[str, Any]] = None
 
 
 class NoteResponse(BaseModel):

@@ -1,13 +1,16 @@
 """
 Telemetry API Routes (Session-Scoped)
-Manage telemetry data ingestion and queries
+
+GET endpoints read from InfluxDB (Yuyang's Docker instance).
+POST endpoints write to in-memory (existing behavior).
 
 Endpoints:
-- POST /api/sessions/{sid}/telemetry           - Ingest telemetry data
-- POST /api/sessions/{sid}/telemetry/batch     - Batch ingest
-- GET  /api/sessions/{sid}/telemetry           - Query telemetry (filters: channel, from/to)
-- GET  /api/sessions/{sid}/telemetry/latest    - Get latest value (e.g., ?channel=voltage)
-- GET  /api/sessions/{sid}/telemetry/channels  - List available channels
+- POST  /{sid}/telemetry           - Ingest single data point
+- POST  /{sid}/telemetry/batch     - Batch ingest
+- GET   /{sid}/telemetry           - Query (filters: channel, from/to)
+- GET   /{sid}/telemetry/latest    - Latest value for a channel
+- GET   /{sid}/telemetry/channels  - List available channels
+- GET   /{sid}/telemetry/summary   - Per-channel stats (min/max/latest)
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -17,12 +20,12 @@ import uuid
 
 from app.schemas import TelemetryCreate, TelemetryBatchCreate, TelemetryResponse
 from app.database import telemetry_db, get_session, get_telemetry_by_session
+from app import influx
 
 router = APIRouter()
 
 
 def _to_aware(dt: datetime) -> datetime:
-    """Ensure datetime is UTC-aware for safe comparison."""
     if dt is None:
         return datetime.min.replace(tzinfo=timezone.utc)
     if dt.tzinfo is None:
@@ -30,15 +33,11 @@ def _to_aware(dt: datetime) -> datetime:
     return dt
 
 
+# ── POST endpoints (write to in-memory, unchanged) ──────────────────────────
+
 @router.post("/{sid}/telemetry", response_model=TelemetryResponse)
 def create_telemetry(sid: str, telemetry: TelemetryCreate):
-    """
-    Ingest telemetry data.
-    Called by: Telemetry Source / AI Module
-
-    Simple schema: timestamp, channel, value, unit
-    Sponsor said: define your own simple schema, they will convert their data to match.
-    """
+    """Ingest telemetry data. Called by: Telemetry Source / AI Module"""
     if not get_session(sid):
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
 
@@ -57,10 +56,7 @@ def create_telemetry(sid: str, telemetry: TelemetryCreate):
 
 @router.post("/{sid}/telemetry/batch")
 def create_telemetry_batch(sid: str, batch: TelemetryBatchCreate):
-    """
-    Batch ingest telemetry data.
-    Called by: Telemetry Source
-    """
+    """Batch ingest telemetry data. Called by: Telemetry Source"""
     if not get_session(sid):
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
 
@@ -80,74 +76,47 @@ def create_telemetry_batch(sid: str, batch: TelemetryBatchCreate):
     return {"created": created_count}
 
 
+# ── GET endpoints (read from InfluxDB) ──────────────────────────────────────
+
 @router.get("/{sid}/telemetry", response_model=List[TelemetryResponse])
 def list_telemetry(
     sid: str,
-    channel: Optional[str] = Query(None, description="Filter by channel name"),
-    from_time: Optional[datetime] = Query(None, alias="from", description="Filter from timestamp (ISO 8601)"),
-    to_time: Optional[datetime] = Query(None, alias="to", description="Filter to timestamp (ISO 8601)"),
-    limit: int = Query(1000, description="Max records to return"),
+    channel: Optional[str] = Query(None),
+    from_time: Optional[datetime] = Query(None, alias="from"),
+    to_time: Optional[datetime] = Query(None, alias="to"),
+    limit: int = Query(1000),
 ):
-    """
-    Query telemetry with optional filters.
-    Called by: Frontend / AI Module
-    """
+    """Query telemetry with optional filters. Called by: Frontend / AI Module"""
     if not get_session(sid):
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
-
-    results = get_telemetry_by_session(sid)
-
-    if channel:
-        results = [t for t in results if t["channel"] == channel]
-    if from_time:
-        if from_time.tzinfo is None:
-            from_time = from_time.replace(tzinfo=timezone.utc)
-        results = [t for t in results if _to_aware(t["timestamp"]) >= from_time]
-    if to_time:
-        if to_time.tzinfo is None:
-            to_time = to_time.replace(tzinfo=timezone.utc)
-        results = [t for t in results if _to_aware(t["timestamp"]) <= to_time]
-
-    results.sort(key=lambda x: _to_aware(x["timestamp"]), reverse=True)
-    return results[:limit]
+    return influx.query_range(sid, channel, from_time, to_time, limit)
 
 
 @router.get("/{sid}/telemetry/latest", response_model=TelemetryResponse)
 def get_latest_telemetry(
     sid: str,
-    channel: str = Query(..., description="Channel name (required). Example: ?channel=voltage"),
+    channel: str = Query(..., description="Channel name"),
 ):
-    """
-    Get latest value for a channel.
-    Called by: AI/Data Module
-
-    Used when operator says "ASTRA, log the voltage" —
-    AI module calls this to get the current value and attach it to a note.
-    """
+    """Get latest value for a channel. Called by: AI/Data Module"""
     if not get_session(sid):
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
-
-    results = [t for t in get_telemetry_by_session(sid) if t["channel"] == channel]
-
-    if not results:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No telemetry found for channel: {channel}",
-        )
-
-    results.sort(key=lambda x: _to_aware(x["timestamp"]), reverse=True)
-    return results[0]
+    result = influx.get_latest(sid, channel)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No telemetry for channel: {channel}")
+    return result
 
 
 @router.get("/{sid}/telemetry/channels")
 def list_channels(sid: str):
-    """
-    List all unique channel names in this session.
-    Called by: Frontend
-    """
+    """List all unique channel names. Called by: Frontend"""
     if not get_session(sid):
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+    return {"channels": influx.get_channels(sid)}
 
-    results = get_telemetry_by_session(sid)
-    channels = sorted(set(t["channel"] for t in results))
-    return {"channels": channels}
+
+@router.get("/{sid}/telemetry/summary")
+def telemetry_summary(sid: str):
+    """Per-channel summary stats. Called by: Frontend / AI Module"""
+    if not get_session(sid):
+        raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+    return influx.get_summary(sid)
