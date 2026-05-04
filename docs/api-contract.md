@@ -1,7 +1,7 @@
 # AiSTRA API Contract
 
-**Version:** 0.3.0  
-**Base URL:** `http://localhost:8000`  
+**Version:** 0.3.0
+**Base URL:** `http://localhost:8000`
 **Last Updated:** May 2026
 
 ---
@@ -16,7 +16,7 @@
 
 | Change | Detail |
 |--------|--------|
-| Note types updated | `observation/command/system` → `detail/anomaly/summary` (sponsor wk14) |
+| Note types updated | `observation/command/system` → `detail/anomaly/summary` |
 | PATCH endpoint added | `PATCH /notes/{id}` — append content to existing anomaly |
 | Session response | Now includes `note_count` field |
 | Export format | Markdown export groups notes by type: Summary → Anomalies → Detailed Notes |
@@ -490,7 +490,7 @@ All events:
 ```js
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
-  
+
   switch (msg.event) {
     case "note.created":
       // Route to correct UI section based on msg.data.type
