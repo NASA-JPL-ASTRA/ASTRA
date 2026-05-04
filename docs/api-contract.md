@@ -1,20 +1,32 @@
-# ASTRA API Contract
+# AiSTRA API Contract
 
-**Version:** 0.2.0  
+**Version:** 0.3.0  
 **Base URL:** `http://localhost:8000`  
-**Last Updated:** February 2025
+**Last Updated:** May 2026
 
 ---
 
 > **Who is this for?**
-> - **Frontend Team ** — Sessions, Notes read/edit/export, Telemetry channels, WebSocket subscription
-> - **AI/Data Team ** — POST notes, STT task lifecycle, telemetry latest value
+> - **Frontend Team** — Sessions, Notes read/edit/export, Telemetry channels, WebSocket subscription
+> - **AI/Data Team** — POST notes (with type), PATCH notes (anomaly append), STT task lifecycle, telemetry queries
+
+---
+
+## What changed in v0.3.0
+
+| Change | Detail |
+|--------|--------|
+| Note types updated | `observation/command/system` → `detail/anomaly/summary` (sponsor wk14) |
+| PATCH endpoint added | `PATCH /notes/{id}` — append content to existing anomaly |
+| Session response | Now includes `note_count` field |
+| Export format | Markdown export groups notes by type: Summary → Anomalies → Detailed Notes |
+| WebSocket event | New `note.appended` event for anomaly append |
 
 ---
 
 ## General Rules
 
-- All timestamps must be **ISO 8601 UTC** format: `2025-01-26T10:32:15Z`
+- All timestamps must be **ISO 8601 UTC** format: `2026-05-04T10:32:15Z`
 - All requests/responses use **JSON** (`Content-Type: application/json`)
 - Session ID (`sid`) is required in the URL path for all session-scoped endpoints
 - A `404` is returned if the session or resource does not exist
@@ -42,8 +54,9 @@
   "name": "Motor Test Session #42",
   "description": "Testing CADRE rover arm torque limits",
   "status": "active",
-  "started_at": "2025-01-26T10:00:00Z",
-  "ended_at": null
+  "started_at": "2026-05-04T10:00:00Z",
+  "ended_at": null,
+  "note_count": 0
 }
 ```
 
@@ -53,7 +66,7 @@
 
 **Called by:** Frontend (dashboard view)
 
-**Response `200`:** Array of session objects (newest first)
+**Response `200`:** Array of session objects (newest first), each with `note_count`.
 
 ---
 
@@ -61,7 +74,7 @@
 
 **Called by:** Frontend
 
-**Response `200`:** Single session object
+**Response `200`:** Single session object with `note_count`.
 
 ---
 
@@ -86,21 +99,33 @@
 
 ## 2. Notes API
 
+### Note Types (sponsor wk14)
+
+| Type | When created | Realtime? | Append? | Description |
+|------|-------------|-----------|---------|-------------|
+| `detail` (default) | Continuously during session | Yes | No — new bullet for new topic | Distilled play-by-play. LLM compresses ~5min of audio into a few sentences with timestamp. |
+| `anomaly` | Operator says "this is an anomaly" | Yes | Yes — PATCH to append | Tracked issues. May recur across the session; LLM appends new observations to existing anomaly. |
+| `summary` | Session end | No | No | Executive summary generated once by LLM from all detail + anomaly notes. |
+
+> **Who classifies?** The AI module (LLM) decides the type. Backend just stores whatever type the AI module sends.
+
+---
+
 ### POST `/api/sessions/{sid}/notes` — Create Note
 
-**Called by: AI/Data Module** (after Whisper transcribes + LLM processes audio chunk)
+**Called by: AI/Data Module** (after LLM processes transcription)
 
 **Request Body:**
 ```json
 {
-  "timestamp": "2025-01-26T10:32:15Z",
+  "timestamp": "2026-05-04T10:32:15Z",
   "speaker": "Engineer A",
-  "content": "Motor current rising to 2.3A, temperature looks stable.",
-  "type": "observation",
-  "tags": ["motor", "current"],
+  "content": "Drove rover around obstacle rock. Motor current peaked at 2.3A during turn.",
+  "type": "detail",
+  "tags": ["motor", "driving"],
   "telemetry_snapshot": {
-    "battery_voltage": 32.5,
-    "motor_current": 2.3
+    "motor_current": 2.3,
+    "battery_voltage": 32.5
   }
 }
 ```
@@ -110,9 +135,29 @@
 | `timestamp` | ISO datetime | ✅ | When observation was made |
 | `speaker` | string | ❌ | e.g. "Engineer A" — from diarization or device label |
 | `content` | string | ✅ | The note text |
-| `type` | enum | ❌ | `observation` (default) / `command` / `system` |
+| `type` | enum | ❌ | `detail` (default) / `anomaly` / `summary` |
 | `tags` | string[] | ❌ | Keywords for filtering, defaults to `[]` |
-| `telemetry_snapshot` | object | ❌ | Optional key-value of relevant telemetry at that moment |
+| `telemetry_snapshot` | object | ❌ | Key-value of relevant telemetry at that moment |
+
+**Anomaly example:**
+```json
+{
+  "timestamp": "2026-05-04T11:15:00Z",
+  "speaker": "Engineer B",
+  "content": "Motor producing unusual vibration noise during arm extension.",
+  "type": "anomaly",
+  "tags": ["motor", "vibration", "arm"]
+}
+```
+
+**Summary example (session end):**
+```json
+{
+  "timestamp": "2026-05-04T17:00:00Z",
+  "content": "Session completed 12 drive tests and 5 arm tests. Two anomalies tracked: motor vibration during arm extension and intermittent GPS signal loss.",
+  "type": "summary"
+}
+```
 
 **Response `200`:** Full note object with generated `id`, `created_at`, `updated_at`
 
@@ -129,13 +174,14 @@
 | Param | Type | Description |
 |-------|------|-------------|
 | `speaker` | string | Filter by speaker name |
-| `type` | enum | Filter by `observation` / `command` / `system` |
+| `type` | enum | Filter by `detail` / `anomaly` / `summary` |
 | `from` | ISO datetime | Notes at or after this time |
 | `to` | ISO datetime | Notes at or before this time |
 
-**Example:**
+**Examples:**
 ```
-GET /api/sessions/sess_abc/notes?speaker=Engineer A&type=observation
+GET /api/sessions/sess_abc/notes?type=anomaly
+GET /api/sessions/sess_abc/notes?type=detail&from=2026-05-04T10:00:00Z
 ```
 
 **Response `200`:** Array of note objects, sorted by `timestamp` ascending.
@@ -152,8 +198,37 @@ GET /api/sessions/sess_abc/notes?speaker=Engineer A&type=observation
 |-------|--------|---------|
 | `format` | `markdown` / `json` | `markdown` |
 
-**Markdown response** — ready to copy/paste into JPL test logs, Confluence, etc.  
-**JSON response** — structured export for programmatic use.
+**Markdown output** is grouped by type:
+```markdown
+# Motor Test Session #42
+
+**Session ID:** sess_abc
+**Started:** 2026-05-04T10:00:00Z
+**Status:** ended
+
+---
+
+## Test Summary
+
+Session completed 12 drive tests...
+
+---
+
+## Anomalies
+
+### Anomaly #1 [11:15:00]
+
+Motor producing unusual vibration noise...
+
+---
+
+## Detailed Notes
+
+- **[10:32:15] Engineer A:** Drove rover around obstacle rock...
+- **[10:45:00] Engineer B:** Arm extension test started...
+```
+
+**JSON output** groups notes into `summary`, `anomalies`, `detailed_notes` arrays.
 
 ---
 
@@ -163,7 +238,7 @@ GET /api/sessions/sess_abc/notes?speaker=Engineer A&type=observation
 
 ---
 
-### PUT `/api/sessions/{sid}/notes/{note_id}` — Edit Note
+### PUT `/api/sessions/{sid}/notes/{note_id}` — Edit Note (Replace)
 
 **Called by:** Frontend (operator manually corrects AI-generated note)
 
@@ -172,7 +247,7 @@ GET /api/sessions/sess_abc/notes?speaker=Engineer A&type=observation
 {
   "content": "Motor current rising to 2.5A (operator correction)",
   "speaker": "Engineer B",
-  "type": "observation",
+  "type": "detail",
   "tags": ["motor", "current", "corrected"]
 }
 ```
@@ -180,6 +255,41 @@ GET /api/sessions/sess_abc/notes?speaker=Engineer A&type=observation
 **Response `200`:** Updated note object.
 
 **Side effect:** Broadcasts `note.updated` to all WebSocket clients.
+
+---
+
+### PATCH `/api/sessions/{sid}/notes/{note_id}` — Append to Note *(New in v0.3.0)*
+
+**Called by: AI/Data Module** (when same anomaly recurs later in the session)
+
+**Use case:** Operator notices motor vibration at 11:15. LLM creates anomaly note. At 14:30 same vibration recurs. LLM appends new observation to the existing note instead of creating a duplicate.
+
+**Request Body:**
+```json
+{
+  "append_content": "Vibration recurred during second arm extension test. Motor temp now at 85°C.",
+  "timestamp": "2026-05-04T14:30:00Z",
+  "telemetry_snapshot": {
+    "motor_temp": 85.0
+  }
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `append_content` | string | ✅ | Text to append |
+| `timestamp` | ISO datetime | ❌ | Defaults to now if omitted |
+| `telemetry_snapshot` | object | ❌ | Merged into existing snapshot |
+
+**What happens:** The `append_content` is added to the note's `content` on a new line with timestamp prefix:
+```
+Motor producing unusual vibration noise during arm extension.
+[14:30:00] Vibration recurred during second arm extension test. Motor temp now at 85°C.
+```
+
+**Response `200`:** Updated note object with appended content.
+
+**Side effect:** Broadcasts `note.appended` to all WebSocket clients.
 
 ---
 
@@ -204,7 +314,7 @@ GET /api/sessions/sess_abc/notes?speaker=Engineer A&type=observation
 
 ```json
 {
-  "timestamp": "2025-01-26T10:32:15Z",
+  "timestamp": "2026-05-04T10:32:15Z",
   "channel": "battery_voltage",
   "value": 32.5,
   "unit": "V"
@@ -247,9 +357,7 @@ Returns records sorted newest-first.
 
 ### GET `/api/sessions/{sid}/telemetry/latest?channel=X` — Get Latest Value
 
-**Called by: AI Module**
-
-Used when operator says *"ASTRA, log the current voltage"* — AI calls this endpoint, gets the live value, and attaches it to a note via `telemetry_snapshot`.
+**Called by: AI Module** (tool-call when LLM needs current telemetry)
 
 **Example:**
 ```
@@ -262,7 +370,7 @@ GET /api/sessions/sess_abc/telemetry/latest?channel=battery_voltage
 
 ### GET `/api/sessions/{sid}/telemetry/channels` — List Channels
 
-**Called by:** Frontend
+**Called by:** Frontend, AI Module
 
 **Response `200`:**
 ```json
@@ -271,9 +379,9 @@ GET /api/sessions/sess_abc/telemetry/latest?channel=battery_voltage
 
 ---
 
-## 4. STT Tasks API *(New in v0.2.0)*
+## 4. STT Tasks API
 
-Manages the lifecycle of speech-to-text audio chunks. Follows the sponsor-approved **pause-based segmentation workflow**.
+Manages the lifecycle of speech-to-text audio chunks. Follows the **pause-based segmentation workflow**.
 
 ### Workflow Summary
 ```
@@ -289,30 +397,12 @@ Frontend detects pause → AI Module registers task → Whisper processes → AI
 **Request Body:**
 ```json
 {
-  "audio_chunk_id": "chunk_20250126_001",
+  "audio_chunk_id": "chunk_20260504_001",
   "duration_seconds": 8.4
 }
 ```
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `audio_chunk_id` | string | ✅ | Your internal reference for the audio file |
-| `duration_seconds` | float | ❌ | Length of the audio segment |
-
-**Response `201`:**
-```json
-{
-  "id": "stt_f1e2d3c4",
-  "session_id": "sess_abc123",
-  "audio_chunk_id": "chunk_20250126_001",
-  "duration_seconds": 8.4,
-  "status": "pending",
-  "transcript": null,
-  "error": null,
-  "created_at": "2025-01-26T10:32:15Z",
-  "updated_at": "2025-01-26T10:32:15Z"
-}
-```
+**Response `201`:** STT task object with `status: "pending"`
 
 **Side effect:** Broadcasts `stt.task.created` via WebSocket.
 
@@ -388,8 +478,9 @@ All events:
 | Event | When | `data` contains |
 |-------|------|-----------------|
 | `connected` | On successful connection | `{ "message": "Connected to session sess_abc123" }` |
-| `note.created` | AI posts a new note | Full note object |
+| `note.created` | AI posts a new note | Full note object (check `type` field for routing) |
 | `note.updated` | Operator edits a note | Updated note object |
+| `note.appended` | AI appends to anomaly | Updated note object with appended content |
 | `note.deleted` | Note is deleted | `{ "id": "note_xxx" }` |
 | `stt.task.created` | AI registers audio chunk | STT task object (status: pending) |
 | `stt.task.done` | Whisper transcript ready | STT task object (status: done, transcript filled) |
@@ -402,9 +493,16 @@ ws.onmessage = (event) => {
   
   switch (msg.event) {
     case "note.created":
-      appendNoteToUI(msg.data);
+      // Route to correct UI section based on msg.data.type
+      if (msg.data.type === "anomaly") addToAnomalyPanel(msg.data);
+      else if (msg.data.type === "summary") showSummary(msg.data);
+      else addToDetailedNotes(msg.data);
       break;
     case "note.updated":
+      updateNoteInUI(msg.data);
+      break;
+    case "note.appended":
+      // Same anomaly note, content has grown
       updateNoteInUI(msg.data);
       break;
     case "note.deleted":
@@ -430,11 +528,6 @@ ws.onmessage = (event) => {
 | `422` | Request body validation failed (check field types/formats) |
 | `500` | Internal server error |
 
-**Example 404:**
-```json
-{ "detail": "Session sess_xyz not found" }
-```
-
 ---
 
 ## Quick Reference: Who Calls What
@@ -443,9 +536,13 @@ ws.onmessage = (event) => {
 |----------|----------|----------------|
 | POST `/sessions` | ✅ | |
 | GET/PATCH `/sessions` | ✅ | |
-| POST `/notes` | | ✅ |
-| GET/PUT/DELETE `/notes` | ✅ | |
+| POST `/notes` | | ✅ (with type) |
+| GET `/notes` | ✅ | |
+| GET `/notes?type=...` | ✅ | |
 | GET `/notes/export` | ✅ | |
+| PUT `/notes/{id}` (edit) | ✅ | |
+| PATCH `/notes/{id}` (append) | | ✅ |
+| DELETE `/notes/{id}` | ✅ | |
 | POST `/telemetry` (ingest) | | ✅ |
 | GET `/telemetry` (query) | ✅ | ✅ |
 | GET `/telemetry/latest` | | ✅ |
