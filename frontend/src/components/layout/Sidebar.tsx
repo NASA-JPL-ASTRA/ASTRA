@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import {
   LayoutDashboard,
   Radio,
@@ -20,13 +22,39 @@ const navItems = [
 ];
 
 export default function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar } = useStore();
+  const { sidebarCollapsed, sidebarWidth, setSidebarWidth, toggleSidebar } = useStore();
+  const effectiveWidth = sidebarCollapsed ? 64 : sidebarWidth;
+  const [isResizing, setIsResizing] = useState(false);
+
+  const startResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (sidebarCollapsed) return;
+    event.preventDefault();
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      setSidebarWidth(moveEvent.clientX);
+    };
+
+    const stop = () => {
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', stop);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', stop);
+  };
 
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen bg-space-dark border-r border-space-border flex flex-col z-50 transition-all duration-300 ${
-        sidebarCollapsed ? 'w-16' : 'w-60'
+      className={`fixed left-0 top-0 h-screen bg-space-dark border-r border-space-border flex flex-col z-50 ${
+        sidebarCollapsed && !isResizing ? 'transition-[width] duration-200' : ''
       }`}
+      style={{ width: effectiveWidth }}
     >
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 h-16 border-b border-space-border shrink-0">
@@ -42,7 +70,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 py-4 px-2 space-y-1">
+      <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
@@ -78,6 +106,14 @@ export default function Sidebar() {
       >
         {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
       </button>
+
+      {!sidebarCollapsed && (
+        <div
+          onMouseDown={startResize}
+          className="absolute right-[-4px] top-0 h-full w-2 cursor-col-resize transition-colors hover:bg-accent-cyan/25"
+          title="Drag to resize sidebar"
+        />
+      )}
     </aside>
   );
 }

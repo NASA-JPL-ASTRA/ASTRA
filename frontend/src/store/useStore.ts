@@ -44,6 +44,7 @@ interface AppState {
 
   // UI
   sidebarCollapsed: boolean;
+  sidebarWidth: number;
   savedSessionToast: string | null;
 
   // Actions
@@ -54,6 +55,7 @@ interface AppState {
   setIsPaused: (value: boolean) => void;
   toggleMute: () => void;
   toggleSidebar: () => void;
+  setSidebarWidth: (width: number) => void;
   updateLog: (id: string, content: string) => void;
   addLog: (log: LogEntry) => void;
   setWsConnected: (connected: boolean) => void;
@@ -106,6 +108,7 @@ export const useStore = create<AppState>((set, get) => ({
   liveNotes: [],
 
   sidebarCollapsed: false,
+  sidebarWidth: 240,
   savedSessionToast: null,
 
   setCurrentSession: (id) => set({ currentSessionId: id }),
@@ -115,6 +118,8 @@ export const useStore = create<AppState>((set, get) => ({
   setIsPaused: (value) => set({ isPaused: value }),
   toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setSidebarWidth: (width) =>
+    set({ sidebarWidth: Math.min(360, Math.max(180, width)) }),
   updateLog: (id, content) =>
     set((s) => ({
       logs: s.logs.map((log) =>
