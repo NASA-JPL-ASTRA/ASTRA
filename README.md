@@ -1,103 +1,109 @@
-# JPL ASTRA - 实时语音转录 Demo
+# JPL ASTRA - Realtime Voice Query Demo
 
-基于 [Fast-Powerful-Whisper-AI-Services-API](https://github.com/Evil0ctal/Fast-Powerful-Whisper-AI-Services-API) 扩展的实时语音转文字 demo，用于 ASTRA 项目的 AI/STT 模块。
+基于本地麦克风 + VAD 分段 + OpenAI API 的实时语音查询 demo。  
 
 ---
 
-## 一、已完成功能
+## 一、当前能力
 
 | 功能 | 说明 |
-|------|------|
-| **实时 STT Demo** | 麦克风录音 + VAD 分段 + Whisper 转录，静音约 1.5s 触发一次 |
-| **幻觉过滤** | 基于 `no_speech_prob`、`avg_logprob` 的置信度过滤，辅以短文本短语兜底 |
-| **服务端过滤** | 幻觉/噪音不写入有效笔记，数据库保持干净 |
-| **笔记导出** | 按时间戳导出，支持按日期筛选、按任务/按 segment 两种模式 |
-| **文件级 Demo** | `demo_astra.py` 上传音频获取 ASTRA 格式结果 |
+|---|---|
+| 实时语音转写 | 麦克风录音 + Silero VAD 分段，静音触发上传，调用 `gpt-4o-transcribe` |
+| 指令意图解析 | 将 transcript 发送到 LLM（默认 `gpt-5.5`）解析 `query_event_log / query_channel_log` |
+| Telemetry 查询 | 根据意图自动读取 `telemetry/<scenario>/event.log` 或 `channel.log` |
+| 工程日志落盘 | 将 transcript + ASTRA 回复写入 `engineering_log.md` |
+| 噪声兜底过滤 | 使用 `app/utils/hallucination_filter.py` 的短语/置信度规则（当前主要依赖短语兜底） |
 
 ---
 
-## 二、工作流程
+## 二、处理流程
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  麦克风录音  │ ──► │  VAD 分段   │ ──► │ 静音 1.5s   │
-│ sounddevice │     │ webrtcvad   │     │ 触发转录     │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                               │
-                                               ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  导出笔记   │ ◄── │  数据库     │ ◄── │ Whisper API │
-│export_notes│     │ SQLite      │     │ 转录+过滤    │
-└─────────────┘     └─────────────┘     └─────────────┘
-```
-
-**流程说明：**
-1. `realtime_demo.py` 持续录音，VAD 检测语音/静音
-2. 静音达到阈值（默认 1.5s）→ 将当前音频保存为 WAV
-3. POST 到 Whisper API → 轮询结果
-4. 客户端 + 服务端双重幻觉过滤
-5. 有效转录存入数据库（`created_at` 为时间戳）
-6. `export_notes.py` 按时间/日期导出为 Markdown 或 TXT
+1. `realtime_demo.py` 持续录音，Silero VAD 判断语音段结束。  
+2. 语音段保存为临时 WAV，调用 OpenAI STT 获取 transcript。  
+3. transcript 先做噪声过滤；若通过，进入意图路由：  
+   - `query_event_log`：查事件日志（例如 terrain bump 的 `y=...m`）  
+   - `query_channel_log`：查通道值（例如 `imu.accel_x`、`motors.motor1_current`）  
+   - 其他情况：走总结分支（Progress / Issues / Next Actions）  
+4. 输出 ASTRA 回复，并把 transcript + 回复追加到 `engineering_log.md`。
 
 ---
 
-## 三、新增/修改文件
+## 三、目录与关键文件
 
-| 文件 | 说明 |
-|------|------|
-| `realtime_demo.py` | 实时 STT demo，麦克风 + VAD + 调用 API |
-| `export_notes.py` | 从数据库导出笔记，支持日期筛选 |
-| `app/utils/hallucination_filter.py` | 幻觉过滤逻辑（置信度 + 短语兜底） |
-| `app/processors/task_processor.py` | 修改：转录后过滤幻觉，不存噪音 |
-| `config/settings.py` | 新增 `FILTER_HALLUCINATION` 配置 |
-| `demo_astra.py` | 文件级 demo，返回 ASTRA 格式 |
-| `requirements-realtime.txt` | 实时 demo 额外依赖 |
+- `realtime_demo.py`：实时录音、STT、意图解析、Telemetry 查询主流程  
+- `.env.example`：本地环境变量模板（提交到仓库）  
+- `requirements-realtime.txt`：realtime demo 依赖  
+- `telemetry/`：测试数据集（`test_1_straight_line`、`test_2_uphill` 等）  
+- `app/utils/hallucination_filter.py`：噪声/幻觉过滤规则
 
 ---
 
 ## 四、快速开始
 
-### 1. 安装依赖
+### 1) 安装依赖
 
 ```bash
-# 主项目
-pip install -r requirements.txt
-
-# 实时 demo 额外依赖
-pip install -r requirements-realtime.txt
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-realtime.txt
 ```
 
-### 2. 启动 Whisper API
+### 2) 配置环境变量
+
+复制模板并填写真实 key：
 
 ```bash
-python start.py
-# 或指定端口（如 80 需 root）：PORT=8000 python start.py
+cp .env.example .env
 ```
 
-### 3. 运行实时 Demo
+必须配置：
+
+- `OPENAI_API_KEY`
+
+常用可选项：
+
+- `OPENAI_STT_MODEL`（默认 `gpt-4o-transcribe`）
+- `OPENAI_SUMMARY_MODEL`（建议填你有权限的模型）
+- `OPENAI_INTENT_MODEL`（建议填你有权限的模型）
+- `OPENAI_API_BASE_URL`（默认 `https://api.openai.com/v1`）
+
+> 注意：`.env` 不要提交；`.env.example` 只能放占位符。
+
+### 3) 运行 demo
 
 ```bash
-python realtime_demo.py --api-url http://127.0.0.1:8000
+python realtime_demo.py --telemetry-root telemetry --default-scenario test_1_straight_line
 ```
 
-可选参数：`--silence-sec`、`--min-speech-sec`、`--debug`
-
-### 4. 导出笔记
+也可显式指定模型：
 
 ```bash
-# 导出全部
-python export_notes.py --output notes.md
-
-# 导出某一天
-python export_notes.py --date 2024-02-18 -o notes_0218.md
-
-# 按 segment 导出
-python export_notes.py --by-segment --format txt -o notes.txt
+python realtime_demo.py \
+  --asr-model gpt-4o-transcribe \
+  --summary-model gpt-5.5 \
+  --intent-model gpt-5.5 \
+  --telemetry-root telemetry \
+  --default-scenario test_1_straight_line
 ```
 
 ---
 
-## 五、幻觉过滤规则
+## 五、语音测试示例
+
+### Event 查询（test_1）
+
+> ASTRA, give me the position of y where a terrain bump is detected when rover is going in straight line.
+
+期望回复（示例）：
+
+`Terrain bump y positions: y=30.0m, y=45.0m, y=75.0m, y=105.0m, y=135.0m`
+
+### Channel 查询
+
+> ASTRA, in test 1 straight line, give me the latest imu.accel_x and motors.motor1_current values from channel log.
+
+---
+
+## 六、幻觉过滤规则
 
 - **置信度**：`no_speech_prob > 0.4` 或 `avg_logprob < -0.5` → 过滤
 - **短语兜底**：仅对长度 ≤ 25 字符的 transcript，若匹配已知幻觉短语则过滤
@@ -105,15 +111,9 @@ python export_notes.py --by-segment --format txt -o notes.txt
 
 ---
 
-## 六、与 Backend 对接
+## 七、与 Backend 对接
 
 - API 合约：`/api/sessions/{sid}/stt/tasks` 注册任务，`PUT` 更新 transcript
 - ASTRA 格式：`format=astra` 返回简化 JSON（session_id, segments, timestamp）
 - 当前 demo 直接调用 Whisper API，后续可对接 Backend 的 STT 路由
 
----
-
-## 七、依赖
-
-- **主项目**：FastAPI、faster-whisper、SQLite、httpx 等
-- **实时 demo**：sounddevice、webrtcvad、numpy
