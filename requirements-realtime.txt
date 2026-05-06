@@ -1,5 +1,8 @@
 # Extra dependencies for realtime_demo.py
 # Install: pip install -r requirements-realtime.txt
 sounddevice>=0.4.6
-webrtcvad>=2.0.10
 numpy>=1.20.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+silero-vad
+torch

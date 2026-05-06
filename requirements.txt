@@ -44,7 +44,6 @@ numba==0.60.0
 numpy==2.0.2
 onnxruntime==1.19.2
 openai==1.54.3
-openai-whisper==20240930
 packaging==24.1
 pillow==11.0.0
 portalocker==2.10.1
@@ -76,3 +75,5 @@ tqdm==4.66.5
 typing_extensions==4.12.2
 urllib3==2.2.3
 uvicorn==0.32.0
+silero-vad
+torch

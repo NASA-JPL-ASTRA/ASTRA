@@ -2,48 +2,74 @@
 """
 JPL ASTRA - Real-time STT Quick Demo
 ====================================
-Quasi-real-time speech-to-text using VAD (pause-based segmentation) + Whisper API.
+Quasi-real-time speech-to-text using VAD (pause-based segmentation) + OpenAI APIs.
 
 Flow:
   1. Microphone records continuously
   2. VAD detects speech pause (configurable, default ~1.5s silence = end of utterance)
   3. Audio chunk saved as WAV
-  4. POST to Whisper API -> poll for result -> print transcript
-  5. Loop
+  4. Send WAV to OpenAI gpt-4o-transcribe -> get transcript
+  5. Send transcript to OpenAI LLM -> get engineering log summary
+  6. Append transcript + summary to engineering log file
+  7. Loop
 
 Requirements:
-  pip install sounddevice webrtcvad numpy
+  python -m pip install -r requirements.txt
 
 Usage:
-  python realtime_demo.py [--api-url URL] [--silence-sec 1.5] [--min-speech-sec 0.45] [--debug]
-  python realtime_demo.py --api-url http://127.0.0.1:8000 --debug   # Print confidence values
+  python realtime_demo.py [--openai-api-key KEY] [--silence-sec 1.5] [--min-speech-sec 0.45]
+  python realtime_demo.py --openai-api-key sk-... --log-path engineering_log.md
 
-Start Whisper API first: python start.py (or PORT=8000 python start.py)
+If --openai-api-key is omitted, OPENAI_API_KEY from environment is used.
 """
 import argparse
+import csv
+import json
+import os
+import re
 import sys
 import tempfile
-import time
 import wave
+from datetime import datetime
 from pathlib import Path
 
-import httpx
 import numpy as np
 import sounddevice as sd
-import webrtcvad
+from dotenv import load_dotenv
+from openai import OpenAI
 
-# Whisper API
-DEFAULT_API_URL = "http://127.0.0.1:8000"
-CREATE_URL = "/api/whisper/tasks/create"
-RESULT_URL = "/api/whisper/tasks/result"
-POLL_INTERVAL = 1.5
-MAX_POLLS = 120
+# Load .env before reading defaults from environment variables.
+load_dotenv()
 
-# Audio config (webrtcvad requires 8k/16k/32k, 16-bit)
+# OpenAI models
+DEFAULT_ASR_MODEL = os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe")
+DEFAULT_SUMMARY_MODEL = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-5.5")
+DEFAULT_INTENT_MODEL = os.getenv("OPENAI_INTENT_MODEL", "gpt-5.5")
+DEFAULT_OPENAI_BASE_URL = os.getenv("OPENAI_API_BASE_URL", "").strip() or None
+DEFAULT_STT_LANGUAGE = os.getenv("OPENAI_STT_LANGUAGE", "").strip() or None
+DEFAULT_STT_PROMPT = os.getenv("OPENAI_STT_PROMPT", "").strip() or None
+DEFAULT_OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_STT_TIMEOUT_SECONDS", "120"))
+DEFAULT_LOG_PATH = "engineering_log.md"
+DEFAULT_TELEMETRY_ROOT = "telemetry"
+DEFAULT_SCENARIO = "test_1_straight_line"
+
+SCENARIO_ALIASES = {
+    "test_1_straight_line": ["straight line", "straight-line", "test 1", "test_1", "straight"],
+    "test_2_nominal_mission": ["test 2", "test_2", "nominal mission", "nominal trajectory"],
+    "test_3_stops_starts_turns": ["test 3", "test_3", "stops starts turns", "stop start turn"],
+    "test_4_motor_stall": ["test 4", "test_4", "motor stall", "stall"],
+    "test_5_imu_malfunction": ["test 5", "test_5", "imu malfunction", "imu anomaly"],
+    "test_6_command_error": ["test 6", "test_6", "command error"],
+}
+
+# Audio config (Silero VAD runs at 16k for this demo)
 SAMPLE_RATE = 16000
 CHANNELS = 1
-FRAME_DURATION_MS = 30  # webrtcvad standard
+FRAME_DURATION_MS = 30
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
+SILERO_WINDOW_MS = 480
+SILERO_TAIL_MS = 120
+SILERO_THRESHOLD = 0.5
 
 # Timing: NOT from Backend README (it says "configurable threshold" but no values).
 # Chosen as reasonable defaults - you can tune via --silence-sec and --min-speech-sec:
@@ -65,54 +91,289 @@ except ImportError:
         return len(t) <= 25 and t in {"thank you", "thanks", "okay", "ok", "bye", "you", "the", "end", "um", "uh"}
 
 
-def create_task_sync(api_url: str, wav_path: Path) -> dict:
-    """Upload WAV to Whisper API, return create response."""
-    url = f"{api_url.rstrip('/')}{CREATE_URL}"
-    params = {
-        "task_type": "transcribe",
-        "priority": "high",
-        "no_speech_threshold": "0.8",           # Higher = less likely to transcribe silence/noise
-        "condition_on_previous_text": "false",  # Reduces hallucinations on short chunks
-        "hallucination_silence_threshold": "0.5",  # Suppress hallucinations after silence
+def transcribe_with_openai(
+    client: OpenAI,
+    wav_path: Path,
+    asr_model: str,
+    stt_language: str | None = None,
+    stt_prompt: str | None = None,
+) -> str:
+    """Transcribe local WAV file with OpenAI audio transcription API."""
+    with open(wav_path, "rb") as audio_file:
+        request_data = {
+            "model": asr_model,
+            "file": audio_file,
+            "response_format": "text",
+        }
+        if stt_language:
+            request_data["language"] = stt_language
+        if stt_prompt:
+            request_data["prompt"] = stt_prompt
+        transcript = client.audio.transcriptions.create(**request_data)
+    return transcript.strip()
+
+
+def summarize_for_engineering_log(client: OpenAI, transcript: str, summary_model: str) -> str:
+    """Summarize transcript into concise engineering log entry."""
+    response = client.chat.completions.create(
+        model=summary_model,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a senior technical project assistant who writes clear engineering logs.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Summarize the following speech transcript into an engineering log entry with exactly "
+                    "three sections:\n"
+                    "1) Progress Today\n"
+                    "2) Issues and Risks\n"
+                    "3) Next Actions\n\n"
+                    "Requirements: keep it concise, actionable, and preserve important technical terms.\n\n"
+                    f"Transcript:\n{transcript}"
+                ),
+            },
+        ]
+    )
+    content = response.choices[0].message.content if response.choices else ""
+    return (content or "").strip()
+
+
+def parse_command_intent(
+    client: OpenAI,
+    transcript: str,
+    intent_model: str,
+    default_scenario: str,
+) -> dict:
+    """
+    Parse transcript into structured command intent using an LLM.
+    Returns a dict with keys:
+      action, scenario, event_filter, field, signal_names, aggregation
+    """
+    schema_hint = {
+        "action": "query_event_log | query_channel_log | summarize_note | unknown",
+        "scenario": "telemetry scenario folder name or null",
+        "event_filter": "event type filter like nav.bump_detected or null",
+        "field": "target field such as y or null",
+        "signal_names": ["imu.accel_x", "motors.motor1_current"],
+        "aggregation": "list | latest | min | max | avg | null",
     }
-    with open(wav_path, "rb") as f:
-        files = {"file_upload": (wav_path.name, f, "audio/wav")}
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(url, params=params, files=files)
-    resp.raise_for_status()
-    return resp.json()
+    prompt = (
+        "You are an intent parser for ASTRA rover voice commands.\n"
+        "Return ONLY JSON, with no markdown.\n"
+        f"JSON schema hint: {json.dumps(schema_hint)}\n\n"
+        "Known scenario folders:\n"
+        "- test_1_straight_line\n"
+        "- test_2_nominal_mission\n"
+        "- test_3_stops_starts_turns\n"
+        "- test_4_motor_stall\n"
+        "- test_5_imu_malfunction\n"
+        "- test_6_command_error\n\n"
+        "Rules:\n"
+        "- If user asks for events from event.log, set action=query_event_log.\n"
+        "- If user asks for signals like imu.accel_x or motors.motor1_current from channel.log, set action=query_channel_log.\n"
+        "- If scenario is not explicit, infer from wording if possible; otherwise keep null.\n"
+        "- If asking for all matches, use aggregation=list.\n"
+        "- If unknown, set action=unknown.\n\n"
+        f"Transcript:\n{transcript}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=intent_model,
+            messages=[
+                {"role": "system", "content": "You are strict about returning valid JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = (response.choices[0].message.content if response.choices else "") or ""
+        parsed = json.loads(content)
+    except Exception:
+        parsed = {"action": "unknown"}
+
+    return {
+        "action": parsed.get("action") or "unknown",
+        "scenario": parsed.get("scenario") or default_scenario,
+        "event_filter": parsed.get("event_filter"),
+        "field": parsed.get("field"),
+        "signal_names": parsed.get("signal_names") or [],
+        "aggregation": parsed.get("aggregation") or "list",
+    }
 
 
-def get_result_sync(api_url: str, task_id: int, full_format: bool = True) -> dict:
-    """Poll Whisper API for task result. full_format=True gets segments with avg_logprob/no_speech_prob."""
-    url = f"{api_url.rstrip('/')}{RESULT_URL}"
-    params = {"task_id": task_id}
-    if not full_format:
-        params["format"] = "astra"
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.get(url, params=params)
-    resp.raise_for_status()
-    return resp.json()
+def infer_scenario_from_transcript(transcript: str, default_scenario: str) -> str:
+    """Infer telemetry scenario from transcript keywords."""
+    text = transcript.lower()
+    for scenario, aliases in SCENARIO_ALIASES.items():
+        if scenario.lower() in text:
+            return scenario
+        if any(alias in text for alias in aliases):
+            return scenario
+    return default_scenario
 
 
-def poll_until_done_sync(api_url: str, task_id: int) -> tuple[str, list]:
-    """
-    Poll until transcription done. Returns (transcript, segments).
-    segments contain avg_logprob, no_speech_prob for confidence-based filtering.
-    """
-    for _ in range(MAX_POLLS):
-        result = get_result_sync(api_url, task_id, full_format=True)
-        code = result.get("code") or result.get("detail", {}).get("code") or 0
-        if code == 200:
-            data = result.get("data", {})
-            task_result = data.get("result") or {}
-            transcript = task_result.get("text", "")
-            segments = task_result.get("segments", [])
-            return transcript, segments
-        if code != 202:
-            raise RuntimeError(f"Task error: {result}")
-        time.sleep(POLL_INTERVAL)
-    raise TimeoutError("Transcription timeout")
+def query_event_log(
+    telemetry_root: Path,
+    scenario: str,
+    event_filter: str | None,
+    field: str | None,
+    aggregation: str,
+) -> str:
+    """Query event.log for target events/fields and return human-readable answer."""
+    event_path = telemetry_root / scenario / "event.log"
+    if not event_path.exists():
+        return f"event.log not found for scenario '{scenario}' at: {event_path}"
+
+    wanted_field = (field or "").strip().lower()
+    filter_text = (event_filter or "").strip().lower()
+    y_pattern = re.compile(r"\by\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*m\b", re.IGNORECASE)
+
+    matches = []
+    with event_path.open("r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 4:
+                continue
+            ts, event_type, _severity, message = row[0].strip(), row[1].strip(), row[2].strip(), row[3].strip()
+            event_type_lower = event_type.lower()
+            message_lower = message.lower()
+            if filter_text and (filter_text not in event_type_lower and filter_text not in message_lower):
+                continue
+            matches.append((ts, event_type, message))
+
+    if not matches:
+        return f"No matching events found in '{scenario}/event.log'."
+
+    # Specialized extraction for y from terrain bump events
+    if wanted_field == "y" or ("bump" in filter_text and not wanted_field):
+        y_vals = []
+        for _ts, _etype, message in matches:
+            m = y_pattern.search(message)
+            if m:
+                y_vals.append(float(m.group(1)))
+        if not y_vals:
+            return f"Found {len(matches)} events, but no 'y=...m' values were extracted."
+        unique_y = sorted(set(y_vals))
+        if aggregation == "latest":
+            return f"Latest y position for terrain bump in {scenario}: y={unique_y[-1]:.1f}m"
+        return "Terrain bump y positions: " + ", ".join(f"y={v:.1f}m" for v in unique_y)
+
+    if aggregation == "latest":
+        ts, etype, msg = matches[-1]
+        return f"Latest event in {scenario}: [{ts}] {etype} - {msg}"
+
+    preview = matches[:5]
+    lines = [f"Found {len(matches)} matching events in {scenario}:"]
+    lines.extend(f"- [{ts}] {etype}: {msg}" for ts, etype, msg in preview)
+    if len(matches) > len(preview):
+        lines.append(f"- ... and {len(matches) - len(preview)} more")
+    return "\n".join(lines)
+
+
+def query_channel_log(
+    telemetry_root: Path,
+    scenario: str,
+    signal_names: list[str],
+    aggregation: str,
+) -> str:
+    """Query channel.log for signal values and return formatted answer."""
+    channel_path = telemetry_root / scenario / "channel.log"
+    if not channel_path.exists():
+        return f"channel.log not found for scenario '{scenario}' at: {channel_path}"
+
+    wanted = [s.strip() for s in signal_names if s and s.strip()]
+    if not wanted:
+        return "No signal names provided for channel.log query (e.g., imu.accel_x, motors.motor1_current)."
+
+    values: dict[str, list[tuple[float, float]]] = {name: [] for name in wanted}
+    with channel_path.open("r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 3:
+                continue
+            ts_raw, signal, val_raw = row[0].strip(), row[1].strip(), row[2].strip()
+            if signal not in values:
+                continue
+            try:
+                ts = float(ts_raw)
+                val = float(val_raw)
+            except ValueError:
+                continue
+            values[signal].append((ts, val))
+
+    lines = [f"channel.log query results for {scenario}:"]
+    for signal in wanted:
+        series = values.get(signal, [])
+        if not series:
+            lines.append(f"- {signal}: not found")
+            continue
+        nums = [v for _t, v in series]
+        if aggregation == "latest":
+            lines.append(f"- {signal}: latest={nums[-1]:.4f}")
+        elif aggregation == "min":
+            lines.append(f"- {signal}: min={min(nums):.4f}")
+        elif aggregation == "max":
+            lines.append(f"- {signal}: max={max(nums):.4f}")
+        elif aggregation == "avg":
+            lines.append(f"- {signal}: avg={sum(nums) / len(nums):.4f}")
+        else:
+            preview = ", ".join(f"{v:.4f}" for v in nums[:10])
+            suffix = " ..." if len(nums) > 10 else ""
+            lines.append(f"- {signal}: [{preview}{suffix}] (count={len(nums)})")
+    return "\n".join(lines)
+
+
+def answer_from_transcript(
+    client: OpenAI,
+    transcript: str,
+    summary_model: str,
+    intent_model: str,
+    telemetry_root: Path,
+    default_scenario: str,
+) -> str:
+    """Generate assistant answer by routing transcript to query or summarize flow."""
+    inferred_scenario = infer_scenario_from_transcript(transcript, default_scenario)
+    intent = parse_command_intent(
+        client=client,
+        transcript=transcript,
+        intent_model=intent_model,
+        default_scenario=inferred_scenario,
+    )
+    scenario = intent.get("scenario") or inferred_scenario
+    action = intent.get("action", "unknown")
+    aggregation = intent.get("aggregation", "list")
+
+    if action == "query_event_log":
+        return query_event_log(
+            telemetry_root=telemetry_root,
+            scenario=scenario,
+            event_filter=intent.get("event_filter"),
+            field=intent.get("field"),
+            aggregation=aggregation,
+        )
+    if action == "query_channel_log":
+        return query_channel_log(
+            telemetry_root=telemetry_root,
+            scenario=scenario,
+            signal_names=intent.get("signal_names") or [],
+            aggregation=aggregation,
+        )
+    return summarize_for_engineering_log(client, transcript, summary_model)
+
+
+def append_engineering_log(log_path: Path, transcript: str, summary: str) -> None:
+    """Append one timestamped transcript+summary block into engineering log."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    block = (
+        f"\n## {ts}\n\n"
+        f"### Transcript\n{transcript}\n\n"
+        f"### Engineering Log Summary\n{summary}\n"
+    )
+    if not log_path.exists():
+        log_path.write_text("# ASTRA Engineering Log\n", encoding="utf-8")
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(block)
 
 
 def save_wav(frames: list, path: Path) -> None:
@@ -125,17 +386,50 @@ def save_wav(frames: list, path: Path) -> None:
         wf.writeframes(raw)
 
 
-def run_realtime_demo(api_url: str, silence_sec: float, min_speech_sec: float, debug: bool = False) -> None:
-    """Main loop: record -> VAD -> transcribe -> print."""
-    vad = webrtcvad.Vad(2)  # Aggressiveness 0-3, 2 is moderate
+def run_realtime_demo(
+    openai_api_key: str,
+    openai_api_base_url: str | None,
+    openai_timeout_sec: float,
+    silence_sec: float,
+    min_speech_sec: float,
+    asr_model: str,
+    stt_language: str | None,
+    stt_prompt: str | None,
+    summary_model: str,
+    intent_model: str,
+    log_path: Path,
+    telemetry_root: Path,
+    default_scenario: str,
+    debug: bool = False
+) -> None:
+    """Main loop: record -> VAD -> transcribe -> query/summarize -> append log."""
+    import torch
+    from silero_vad import get_speech_timestamps, load_silero_vad
+
+    vad_model = load_silero_vad()
+    openai_client = OpenAI(
+        api_key=openai_api_key,
+        base_url=openai_api_base_url,
+        timeout=openai_timeout_sec,
+    )
 
     silence_threshold_frames = int(silence_sec * 1000 / FRAME_DURATION_MS)
     min_speech_frames = int(min_speech_sec * 1000 / FRAME_DURATION_MS)
+    vad_window_samples = int(SAMPLE_RATE * SILERO_WINDOW_MS / 1000)
+    vad_tail_samples = int(SAMPLE_RATE * SILERO_TAIL_MS / 1000)
 
     print("=" * 50)
     print("JPL ASTRA - Real-time STT Demo")
     print("=" * 50)
-    print(f"API: {api_url}")
+    print(f"OpenAI base URL: {openai_api_base_url or 'https://api.openai.com/v1'}")
+    print(f"OpenAI timeout: {openai_timeout_sec:.1f}s")
+    print(f"ASR model: {asr_model}")
+    print(f"STT language hint: {stt_language or '(auto)'}")
+    print(f"Summary model: {summary_model}")
+    print(f"Intent model: {intent_model}")
+    print(f"Telemetry root: {telemetry_root.resolve()}")
+    print(f"Default scenario: {default_scenario}")
+    print(f"Engineering log: {log_path.resolve()}")
     print(f"Sample rate: {SAMPLE_RATE} Hz")
     print(f"Silence to trigger: {silence_sec}s | Min speech: {min_speech_sec}s")
     print("Press Ctrl+C to quit.")
@@ -144,21 +438,39 @@ def run_realtime_demo(api_url: str, silence_sec: float, min_speech_sec: float, d
     speech_frames = []
     silence_frames = 0
     in_speech = False
+    vad_buffer = np.zeros(0, dtype=np.float32)
 
     def audio_callback(indata, frames, time_info, status):
-        nonlocal speech_frames, silence_frames, in_speech
+        nonlocal speech_frames, silence_frames, in_speech, vad_buffer
         if status:
             print(f"[Audio] {status}", file=sys.stderr)
         # indata is (frames, channels), float32 in [-1, 1]
-        # Convert to int16 for webrtcvad
+        # Convert to int16 for WAV/transport compatibility
         pcm = (indata[:, 0] * 32767).astype(np.int16)
-        raw = pcm.tobytes()
         # Process in 30ms chunks
-        for i in range(0, len(raw), FRAME_SIZE * 2):
-            chunk = raw[i : i + FRAME_SIZE * 2]
-            if len(chunk) < FRAME_SIZE * 2:
+        for i in range(0, len(pcm), FRAME_SIZE):
+            chunk_i16 = pcm[i : i + FRAME_SIZE]
+            if len(chunk_i16) < FRAME_SIZE:
                 break
-            is_speech = vad.is_speech(chunk, SAMPLE_RATE)
+            chunk = chunk_i16.tobytes()
+            chunk_f32 = chunk_i16.astype(np.float32) / 32768.0
+
+            vad_buffer = np.concatenate((vad_buffer, chunk_f32))
+            if vad_buffer.size > vad_window_samples:
+                vad_buffer = vad_buffer[-vad_window_samples:]
+
+            speech_timestamps = get_speech_timestamps(
+                torch.from_numpy(vad_buffer.copy()),
+                vad_model,
+                sampling_rate=SAMPLE_RATE,
+                threshold=SILERO_THRESHOLD,
+                min_speech_duration_ms=100,
+                min_silence_duration_ms=80,
+                speech_pad_ms=30,
+            )
+            recent_boundary = max(0, vad_buffer.size - vad_tail_samples)
+            is_speech = any(ts["end"] > recent_boundary for ts in speech_timestamps)
+
             if is_speech:
                 speech_frames.append(chunk)
                 silence_frames = 0
@@ -181,17 +493,30 @@ def run_realtime_demo(api_url: str, silence_sec: float, min_speech_sec: float, d
             save_wav(frames_to_process, tmp_path)
             duration = len(frames_to_process) * FRAME_DURATION_MS / 1000
             print(f"\n  [Processing {duration:.1f}s of audio...]")
-            create_resp = create_task_sync(api_url, tmp_path)
-            task_id = create_resp.get("data", {}).get("id")
-            if not task_id:
-                print("  [Error] No task_id in response")
-                return
-            transcript, segments = poll_until_done_sync(api_url, task_id)
+            transcript = transcribe_with_openai(
+                openai_client,
+                tmp_path,
+                asr_model,
+                stt_language=stt_language,
+                stt_prompt=stt_prompt,
+            )
+            segments = []
             if transcript.strip():
                 if is_likely_hallucination(transcript, segments, debug=debug):
                     print("  >>> (noise / no actual content)")
                 else:
                     print(f"  >>> {transcript}")
+                    answer = answer_from_transcript(
+                        client=openai_client,
+                        transcript=transcript,
+                        summary_model=summary_model,
+                        intent_model=intent_model,
+                        telemetry_root=telemetry_root,
+                        default_scenario=default_scenario,
+                    )
+                    print(f"  [ASTRA] {answer}")
+                    append_engineering_log(log_path, transcript, answer)
+                    print("  [Engineering log updated]")
             else:
                 print("  >>> (no speech detected)")
         except Exception as e:
@@ -218,7 +543,56 @@ def run_realtime_demo(api_url: str, silence_sec: float, min_speech_sec: float, d
 
 def main():
     parser = argparse.ArgumentParser(description="Real-time STT Quick Demo")
-    parser.add_argument("--api-url", default=DEFAULT_API_URL, help="Whisper API URL")
+    parser.add_argument("--openai-api-key", default=None, help="OpenAI API Key (default: from OPENAI_API_KEY)")
+    parser.add_argument(
+        "--openai-api-base-url",
+        default=DEFAULT_OPENAI_BASE_URL,
+        help=f"OpenAI base URL (default: {DEFAULT_OPENAI_BASE_URL or 'https://api.openai.com/v1'})",
+    )
+    parser.add_argument(
+        "--openai-timeout-sec",
+        type=float,
+        default=DEFAULT_OPENAI_TIMEOUT_SECONDS,
+        help=f"Timeout for OpenAI calls in seconds (default: {DEFAULT_OPENAI_TIMEOUT_SECONDS})",
+    )
+    parser.add_argument("--asr-model", default=DEFAULT_ASR_MODEL, help=f"OpenAI ASR model (default: {DEFAULT_ASR_MODEL})")
+    parser.add_argument(
+        "--stt-language",
+        default=DEFAULT_STT_LANGUAGE,
+        help=f"STT language hint, e.g. en/zh (default: {DEFAULT_STT_LANGUAGE or 'auto-detect'})",
+    )
+    parser.add_argument(
+        "--stt-prompt",
+        default=DEFAULT_STT_PROMPT,
+        help="Optional priming prompt for transcription bias",
+    )
+    parser.add_argument(
+        "--summary-model",
+        default=DEFAULT_SUMMARY_MODEL,
+        help=f"OpenAI summary model (default: {DEFAULT_SUMMARY_MODEL})"
+    )
+    parser.add_argument(
+        "--intent-model",
+        default=DEFAULT_INTENT_MODEL,
+        help=f"OpenAI intent parser model (default: {DEFAULT_INTENT_MODEL})"
+    )
+    parser.add_argument(
+        "--log-path",
+        type=Path,
+        default=Path(DEFAULT_LOG_PATH),
+        help=f"Engineering log output path (default: {DEFAULT_LOG_PATH})"
+    )
+    parser.add_argument(
+        "--telemetry-root",
+        type=Path,
+        default=Path(DEFAULT_TELEMETRY_ROOT),
+        help=f"Telemetry dataset root directory (default: {DEFAULT_TELEMETRY_ROOT})"
+    )
+    parser.add_argument(
+        "--default-scenario",
+        default=DEFAULT_SCENARIO,
+        help=f"Default telemetry scenario if not inferred (default: {DEFAULT_SCENARIO})"
+    )
     parser.add_argument(
         "--silence-sec", type=float, default=DEFAULT_SILENCE_SEC,
         help="Seconds of silence to trigger transcription (default: 1.5)"
@@ -232,18 +606,38 @@ def main():
         help="Print confidence values (no_speech_prob, avg_logprob) when filtering"
     )
     args = parser.parse_args()
+    openai_api_key = args.openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        print("Missing OpenAI API key. Provide --openai-api-key or set OPENAI_API_KEY.")
+        sys.exit(1)
 
     # Check dependencies
     try:
         import sounddevice
-        import webrtcvad
         import numpy
+        import torch
+        import silero_vad
     except ImportError:
         print("Missing dependency. Install with:")
-        print("  pip install sounddevice webrtcvad numpy")
+        print("  python -m pip install -r requirements.txt")
         sys.exit(1)
 
-    run_realtime_demo(args.api_url, args.silence_sec, args.min_speech_sec, debug=args.debug)
+    run_realtime_demo(
+        openai_api_key=openai_api_key,
+        openai_api_base_url=args.openai_api_base_url,
+        openai_timeout_sec=args.openai_timeout_sec,
+        silence_sec=args.silence_sec,
+        min_speech_sec=args.min_speech_sec,
+        asr_model=args.asr_model,
+        stt_language=args.stt_language,
+        stt_prompt=args.stt_prompt,
+        summary_model=args.summary_model,
+        intent_model=args.intent_model,
+        log_path=args.log_path,
+        telemetry_root=args.telemetry_root,
+        default_scenario=args.default_scenario,
+        debug=args.debug,
+    )
 
 
 if __name__ == "__main__":

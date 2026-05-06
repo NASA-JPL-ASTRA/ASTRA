@@ -40,8 +40,11 @@ from asyncio import Queue
 from typing import Optional
 from app.utils.logging_utils import configure_logging
 
-# OpenAI Whisper 模型 | OpenAI Whisper model
-import whisper
+# OpenAI Whisper 模型 | OpenAI Whisper model (optional dependency)
+try:
+    import whisper
+except ImportError:
+    whisper = None
 
 # Faster-Whisper 模型 | Faster-Whisper model
 from faster_whisper import WhisperModel
@@ -340,6 +343,11 @@ class AsyncModelPool:
                 )
                 end_time = datetime.datetime.now()
             elif self.engine == "openai_whisper":
+                if whisper is None:
+                    raise ModuleNotFoundError(
+                        "openai-whisper is not installed. Install `openai-whisper` "
+                        "to use engine='openai_whisper', or switch engine to 'faster_whisper'."
+                    )
                 start_time = datetime.datetime.now()
                 model = await asyncio.to_thread(
                     whisper.load_model,
