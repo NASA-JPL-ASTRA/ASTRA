@@ -30,6 +30,12 @@ cp .env.example .env          # then fill in OPENAI_API_KEY
 uvicorn app.main:app --reload
 ```
 
+Use the same virtualenv for `uvicorn` as for `pip install` (e.g. `source venv/bin/activate` before
+running the command, or `venv/bin/uvicorn app.main:app --reload`). If you see
+`ModuleNotFoundError: No module named 'influxdb_client'`, the optional telemetry query
+dependencies were not installed in **that** interpreter — run `pip install -r requirements.txt`
+again inside the activated venv.
+
 Swagger UI: <http://localhost:8000/docs>  
 Health:     <http://localhost:8000/health>
 

@@ -162,3 +162,127 @@ export async function uploadAudioChunk(
 
   return response.json();
 }
+
+// ── Telemetry query API (GET /api/query/… — Influx + channel search) ──
+
+export type TelemetryQueryResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; message: string };
+
+function parseTelemetryError(status: number, text: string): string {
+  if (!text) return `API ${status}`;
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    if (typeof parsed?.detail === 'string') return parsed.detail;
+    if (Array.isArray(parsed?.detail) && parsed.detail[0]?.msg) {
+      return String(parsed.detail[0].msg);
+    }
+    if (typeof parsed?.error === 'string') return parsed.error;
+  } catch {
+    // not JSON
+  }
+  return text;
+}
+
+export async function fetchTelemetryQuery<T>(
+  path: string,
+): Promise<TelemetryQueryResult<T>> {
+  const response = await fetch(`${API_URL}${path}`);
+  const text = await response.text();
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: parseTelemetryError(response.status, text),
+    };
+  }
+  if (!text) {
+    return { ok: true, data: [] as T };
+  }
+  return { ok: true, data: JSON.parse(text) as T };
+}
+
+export interface ChannelValueResponse {
+  channel: string;
+  value: number;
+  timestamp: number;
+}
+
+export interface ChannelRangeResponse {
+  channel: string;
+  session_id: string;
+  start: number;
+  end: number;
+  min: number;
+  max: number;
+  mean: number;
+  last: number;
+}
+
+export interface EvrEventRow {
+  timestamp: number;
+  evr_name: string | null;
+  severity: string | null;
+  message: string;
+}
+
+export interface ChannelSearchHit {
+  channel: string;
+  score: number;
+}
+
+export function getTelemetryQueryInfo(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>('/query', { method: 'GET' });
+}
+
+export function queryChannelValue(
+  sessionId: string,
+  name: string,
+  at: number,
+): Promise<TelemetryQueryResult<ChannelValueResponse>> {
+  const q = new URLSearchParams({
+    session: sessionId,
+    name,
+    at: String(at),
+  });
+  return fetchTelemetryQuery<ChannelValueResponse>(`/query/channel?${q}`);
+}
+
+export function queryChannelRange(
+  sessionId: string,
+  name: string,
+  t0: number,
+  t1: number,
+): Promise<TelemetryQueryResult<ChannelRangeResponse>> {
+  const q = new URLSearchParams({
+    session: sessionId,
+    name,
+    t0: String(t0),
+    t1: String(t1),
+  });
+  return fetchTelemetryQuery<ChannelRangeResponse>(`/query/range?${q}`);
+}
+
+export function queryTelemetryEvents(
+  sessionId: string,
+  t0: number,
+  t1: number,
+  options?: { severity?: string; limit?: number },
+): Promise<TelemetryQueryResult<EvrEventRow[]>> {
+  const q = new URLSearchParams({
+    session: sessionId,
+    t0: String(t0),
+    t1: String(t1),
+  });
+  if (options?.severity) q.set('severity', options.severity);
+  if (options?.limit != null) q.set('limit', String(options.limit));
+  return fetchTelemetryQuery<EvrEventRow[]>(`/query/events?${q}`);
+}
+
+export function searchTelemetryChannels(
+  q: string,
+  k: number = 3,
+): Promise<TelemetryQueryResult<ChannelSearchHit[]>> {
+  const params = new URLSearchParams({ q, k: String(k) });
+  return fetchTelemetryQuery<ChannelSearchHit[]>(`/query/search?${params}`);
+}

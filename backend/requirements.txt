@@ -1,9 +1,16 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-sqlalchemy==2.0.25
-pydantic==2.5.3
-python-dotenv==1.0.0
-websockets==12.0
-requests==2.31.0
+# Core stack: flexible ranges so pip can resolve prebuilt wheels on Python 3.11–3.14.
+# (Pinned pydantic<2.10 + old fastapi cannot install on 3.14 — no cp314 wheels for pydantic-core.)
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.32.0
+sqlalchemy>=2.0.36,<3.0.0
+pydantic>=2.10.0,<3.0.0
+python-dotenv>=1.0.1
+websockets>=16.0
+requests>=2.32.0
 httpx>=0.27.0
-python-multipart>=0.0.6
+python-multipart>=0.0.20
+
+# Telemetry query (InfluxDB + TF-IDF channel search — see telemetry/)
+influxdb-client==1.40.0
+scikit-learn>=1.3.0
+numpy>=1.24.0

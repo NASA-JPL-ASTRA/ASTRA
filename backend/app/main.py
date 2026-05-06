@@ -5,6 +5,7 @@ NASA JPL Testbed Recording and Analysis System
 
 # Load environment variables from backend/.env BEFORE importing any module
 # that reads them at import time (e.g. app.services.openai_stt).
+import logging
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -14,6 +15,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import sessions, notes, telemetry, websocket, stt
+
+logger = logging.getLogger(__name__)
 
 
 def get_cors_origins() -> list[str]:
@@ -31,6 +34,18 @@ def get_cors_origins() -> list[str]:
         if origin.strip()
     ]
     return list(dict.fromkeys(default_origins + extra_origins))
+
+
+try:
+    from app.routes import telemetry_query
+except ModuleNotFoundError as e:
+    telemetry_query = None
+    logger.warning(
+        "Telemetry query routes disabled: missing optional dependency %r. "
+        "Install with: pip install -r requirements.txt (see influxdb-client, scikit-learn, numpy).",
+        e.name,
+    )
+
 
 app = FastAPI(
     title="ASTRA Backend",
@@ -51,6 +66,8 @@ app.include_router(notes.router,     prefix="/api/sessions", tags=["Notes"])
 app.include_router(telemetry.router, prefix="/api/sessions", tags=["Telemetry"])
 app.include_router(stt.router,       prefix="/api/sessions", tags=["STT"])
 app.include_router(websocket.router, prefix="/ws/sessions",  tags=["WebSocket"])
+if telemetry_query is not None:
+    app.include_router(telemetry_query.router, prefix="/api", tags=["Telemetry Query"])
 
 
 @app.get("/")
@@ -60,6 +77,7 @@ def root():
         "service": "ASTRA Backend",
         "version": "0.3.0",
         "docs": "/docs",
+        "telemetry_query_api": telemetry_query is not None,
     }
 
 

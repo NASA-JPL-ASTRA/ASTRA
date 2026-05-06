@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Satellite,
+  LineChart,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 
@@ -17,6 +18,7 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/session', icon: Radio, label: 'Active Session' },
   { to: '/history', icon: Clock, label: 'Structured Notes' },
+  { to: '/telemetry-query', icon: LineChart, label: 'Telemetry Query' },
   { to: '/documents', icon: FileText, label: 'Documents' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

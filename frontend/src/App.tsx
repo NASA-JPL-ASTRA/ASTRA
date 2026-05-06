@@ -6,6 +6,7 @@ import HistoryPage from './pages/HistoryPage';
 import SessionDetailPage from './pages/SessionDetailPage';
 import DocumentsPage from './pages/DocumentsPage';
 import SettingsPage from './pages/SettingsPage';
+import TelemetryQueryPage from './pages/TelemetryQueryPage';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/history/:id" element={<SessionDetailPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/telemetry-query" element={<TelemetryQueryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>
