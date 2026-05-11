@@ -1,0 +1,2 @@
+# Alias for older docs/scripts. Python 3.14+ uses the same pins as requirements.txt.
+-r requirements.txt

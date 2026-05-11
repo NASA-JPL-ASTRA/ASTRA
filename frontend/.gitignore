@@ -1,0 +1,6 @@
+# Frontend-specific overrides only.
+# Most rules (node_modules, dist, .env*, logs, etc.) live in the repo-root .gitignore.
+
+# Local Vite / build caches that only appear under frontend/
+.vite/
+*.tsbuildinfo
