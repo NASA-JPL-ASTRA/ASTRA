@@ -16,6 +16,7 @@ import uuid
 
 from app.schemas import SessionCreate, SessionUpdate, SessionResponse, SessionStatus
 from app.database import sessions_db, get_session, count_notes_by_session
+from app.ws_manager import broadcast, EVENT_SESSION_ENDED
 
 router = APIRouter()
 
@@ -81,10 +82,13 @@ def get_session_by_id(sid: str):
 
 
 @router.patch("/{sid}", response_model=SessionResponse)
-def update_session(sid: str, update: SessionUpdate):
+async def update_session(sid: str, update: SessionUpdate):
     """
     Update session metadata (e.g., status=ended).
     Called by: Frontend / System
+
+    When status changes to ended, broadcasts session.ended so
+    the AI module knows to generate a summary note.
     """
     session = get_session(sid)
     if not session:
@@ -98,5 +102,6 @@ def update_session(sid: str, update: SessionUpdate):
         session["status"] = update.status
         if update.status == SessionStatus.ended:
             session["ended_at"] = utcnow()
+            await broadcast(sid, EVENT_SESSION_ENDED, serialize_session(session))
 
     return serialize_session(session)

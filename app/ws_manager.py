@@ -20,7 +20,9 @@ EVENT_STT_TASK_CREATED = "stt.task.created"
 EVENT_STT_TASK_DONE    = "stt.task.done"
 EVENT_STT_CHUNK_READY  = "transcript.chunk.ready"
 
-EVENT_ERROR_OCCURRED   = "error.occurred"   # NEW
+EVENT_SESSION_ENDED    = "session.ended"
+
+EVENT_ERROR_OCCURRED   = "error.occurred"
 
 
 # ============ Broadcast ============
