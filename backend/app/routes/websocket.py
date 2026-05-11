@@ -34,12 +34,26 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
     2. Backend broadcasts events when notes change
     3. Frontend updates UI in real-time
     """
+    await websocket.accept()
     session = get_session(sid)
     if not session:
-        await websocket.close(code=4004, reason=f"Session {sid} not found")
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "event": "session.not_found",
+                    "session_id": sid,
+                    "data": {
+                        "message": (
+                            f"Session {sid} not found. "
+                            "The dev backend keeps sessions in RAM — restart clears them; "
+                            "start a new recording from the home page."
+                        ),
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008)
         return
-
-    await websocket.accept()
 
     if sid not in ws_connections:
         ws_connections[sid] = []

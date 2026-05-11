@@ -94,6 +94,52 @@ export interface BackendNote {
   updated_at: string;
 }
 
+/** Backend structure note (timestamps: ISO 8601 with timezone, e.g. …+00:00). */
+export type StructureTestSummaryStatus =
+  | 'pending'
+  | 'generating'
+  | 'ready'
+  | 'skipped'
+  | 'error';
+
+export interface StructureNoteTestSummary {
+  status: StructureTestSummaryStatus;
+  generated_at: string | null;
+  content_markdown: string;
+  error?: string | null;
+}
+
+export interface StructureNoteAnomaly {
+  id: string;
+  recorded_at: string;
+  user_utterance_raw: string;
+  title: string;
+  description: string;
+  severity: 'info' | 'low' | 'med' | 'high';
+  merge_of?: string[];
+  related_telemetry_refs?: { scenario?: string | null; log?: string | null; time?: string | null }[];
+  known_pattern_id?: string | null;
+}
+
+export interface StructureNoteDetailParagraph {
+  id: string;
+  updated_at: string;
+  time_anchor: string;
+  bullet_markdown: string;
+  source_transcript_excerpt: string;
+  source_task_ids?: string[];
+}
+
+export interface StructureNoteDocument {
+  schema_version: string;
+  session_id: string;
+  updated_at: string;
+  telemetry_time_format: string;
+  test_summary: StructureNoteTestSummary;
+  anomalies: StructureNoteAnomaly[];
+  detail_notes: { paragraphs: StructureNoteDetailParagraph[] };
+}
+
 export interface Document {
   id: string;
   name: string;

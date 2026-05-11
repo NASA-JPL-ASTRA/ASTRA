@@ -9,15 +9,37 @@ Endpoints:
 - PATCH  /api/sessions/{sid}     - Update session metadata (e.g., status=ended)
 """
 
-from fastapi import APIRouter, HTTPException
-from typing import List
 from datetime import datetime, timezone
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from typing import List
 import uuid
 
 from app.schemas import SessionCreate, SessionUpdate, SessionResponse, SessionStatus
-from app.database import sessions_db, get_session, count_notes_by_session
+from app.database import sessions_db, get_session, count_notes_by_session, structure_notes_db
+from app.ws_manager import EVENT_STRUCTURE_NOTE_UPDATED, broadcast
 
 router = APIRouter()
+
+
+def _generate_session_test1_telemetry_job(session_id: str, started_at: datetime) -> None:
+    """Background: write test_1 mock logs aligned to session start; store path on session dict."""
+    from app.database import sessions_db
+    from app.services.session_telemetry_mock import generate_test1_telemetry_for_session
+
+    path = generate_test1_telemetry_for_session(session_id, started_at)
+    sess = sessions_db.get(session_id)
+    if sess is not None and path:
+        sess["telemetry_mock_test1_path"] = path
+
+
+async def _finalize_structure_note_job(session_id: str) -> None:
+    """Runs after session ends: fills test_summary and notifies WebSocket clients."""
+    from app.services.structure_note_engine import finalize_session_structure_note
+
+    finalize_session_structure_note(session_id)
+    payload = structure_notes_db.get(session_id, {})
+    await broadcast(session_id, EVENT_STRUCTURE_NOTE_UPDATED, payload)
 
 
 def utcnow() -> datetime:
@@ -30,11 +52,12 @@ def serialize_session(session: dict) -> dict:
     return {
         **session,
         "note_count": count_notes_by_session(session["id"]),
+        "telemetry_mock_test1_path": session.get("telemetry_mock_test1_path"),
     }
 
 
 @router.post("", response_model=SessionResponse)
-def create_session(session: SessionCreate):
+def create_session(session: SessionCreate, background_tasks: BackgroundTasks):
     """
     Create new test session
     Called by: Frontend / System
@@ -48,9 +71,15 @@ def create_session(session: SessionCreate):
         "status": SessionStatus.active,
         "started_at": utcnow(),
         "ended_at": None,
+        "telemetry_mock_test1_path": None,
     }
 
     sessions_db[session_id] = new_session
+    background_tasks.add_task(
+        _generate_session_test1_telemetry_job,
+        session_id,
+        new_session["started_at"],
+    )
     return serialize_session(new_session)
 
 
@@ -81,7 +110,7 @@ def get_session_by_id(sid: str):
 
 
 @router.patch("/{sid}", response_model=SessionResponse)
-def update_session(sid: str, update: SessionUpdate):
+def update_session(sid: str, update: SessionUpdate, background_tasks: BackgroundTasks):
     """
     Update session metadata (e.g., status=ended).
     Called by: Frontend / System
@@ -98,5 +127,6 @@ def update_session(sid: str, update: SessionUpdate):
         session["status"] = update.status
         if update.status == SessionStatus.ended:
             session["ended_at"] = utcnow()
+            background_tasks.add_task(_finalize_structure_note_job, sid)
 
     return serialize_session(session)

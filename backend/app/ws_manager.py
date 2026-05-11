@@ -19,6 +19,8 @@ EVENT_STT_TASK_CREATED = "stt.task.created"
 EVENT_STT_TASK_DONE    = "stt.task.done"
 EVENT_STT_CHUNK_READY  = "transcript.chunk.ready"
 
+EVENT_STRUCTURE_NOTE_UPDATED = "structure_note.updated"
+
 EVENT_ERROR_OCCURRED   = "error.occurred"   # NEW
 
 

@@ -27,7 +27,8 @@ class OpenAIStreamingTranscriptionService:
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
         self.model = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
-        self.language = os.getenv("OPENAI_STT_LANGUAGE", "").strip() or None
+        # Default English: operational voice for this project is English-only.
+        self.language = (os.getenv("OPENAI_STT_LANGUAGE") or "en").strip() or None
         self.prompt = os.getenv("OPENAI_STT_PROMPT", "").strip() or None
         self.timeout = float(os.getenv("OPENAI_STT_TIMEOUT_SECONDS", "120"))
 

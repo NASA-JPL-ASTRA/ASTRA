@@ -4,8 +4,41 @@ import { createSession, endSession, uploadAudioChunk } from '../services/api';
 import { connectSessionWs, type SessionWsConnection } from '../services/sessionWs';
 import type { BackendNote } from '../types';
 
-const CHUNK_INTERVAL_MS = 3000;
 const TARGET_SAMPLE_RATE = 16000;
+
+/** End an utterance and send STT after this much trailing silence (pause-based chunking). */
+const PAUSE_TO_FLUSH_SEC = 1.0;
+/** Safety cap so one uninterrupted monologue still ships in bounded chunks. */
+const MAX_UTTERANCE_SEC = 90;
+
+/** When both stay below these, skip STT upload (reduces silence / room-noise hallucinations). */
+const SILENCE_RMS_MAX = 0.006;
+const SILENCE_PEAK_MAX = 0.022;
+
+function pcmWindowSignalStats(samples: Float32Array): { rms: number; peak: number } {
+  if (samples.length === 0) return { rms: 0, peak: 0 };
+  let sumSq = 0;
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const v = samples[i];
+    const a = Math.abs(v);
+    if (a > peak) peak = a;
+    sumSq += v * v;
+  }
+  return { rms: Math.sqrt(sumSq / samples.length), peak };
+}
+
+function mergeFloat32Parts(parts: Float32Array[]): Float32Array {
+  const totalLen = parts.reduce((n, c) => n + c.length, 0);
+  const merged = new Float32Array(totalLen);
+  let offset = 0;
+  for (const c of parts) {
+    merged.set(c, offset);
+    offset += c.length;
+  }
+  return merged;
+}
+
 const LEVEL_UPDATE_INTERVAL_MS = 80;
 
 // Force-finalize a sentence if it keeps growing past this many characters
@@ -114,8 +147,9 @@ function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
  * Real audio capture + transcription hook.
  *
  * Captures audio from the browser microphone via getUserMedia, provides
- * real-time audio levels from an AnalyserNode, and buffers PCM chunks
- * (16kHz mono Int16) ready to send to the Whisper backend.
+ * real-time audio levels from an AnalyserNode, and ships **pause-based**
+ * utterances (flush after ~1s silence, or max length cap) as 16 kHz mono WAV
+ * to the backend STT.
  */
 export function useWhisper() {
   const {
@@ -148,8 +182,11 @@ export function useWhisper() {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const levelTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pcmBufferRef = useRef<Float32Array[]>([]);
-  const chunkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Float32 mic buffers accumulated for the current spoken utterance (native sample rate). */
+  const utterancePcmPartsRef = useRef<Float32Array[]>([]);
+  /** Consecutive silent samples while waiting to close an utterance. */
+  const silenceGapSamplesRef = useRef(0);
+  const flushPendingUtteranceRef = useRef<() => Promise<void> | null>(null);
 
   // ── Connection refs ──
   const wsConnectionRef = useRef<SessionWsConnection | null>(null);
@@ -161,7 +198,7 @@ export function useWhisper() {
   const isActiveRef = useRef(false);
 
   // ── Sentence accumulation refs ──
-  // Transcriptions arrive per 3s chunk, but a spoken sentence usually spans
+  // Transcriptions arrive per pause-based chunk; a spoken sentence may still span
   // multiple chunks. We accumulate chunk text client-side into one "live"
   // entry keyed by a frontend-generated sentence id, and only promote it to
   // final when we see sentence-terminating punctuation.
@@ -245,40 +282,45 @@ export function useWhisper() {
     return uploadChainRef.current;
   }, []);
 
-  const flushChunk = useCallback(() => {
-    const chunks = pcmBufferRef.current;
-    if (chunks.length === 0) return null;
-
-    const totalLen = chunks.reduce((n, c) => n + c.length, 0);
-    const merged = new Float32Array(totalLen);
-    let offset = 0;
-    for (const c of chunks) {
-      merged.set(c, offset);
-      offset += c.length;
-    }
-    pcmBufferRef.current = [];
+  const flushPendingUtterance = useCallback((): Promise<void> | null => {
+    const parts = utterancePcmPartsRef.current;
+    if (parts.length === 0) return null;
+    const merged = mergeFloat32Parts(parts);
+    utterancePcmPartsRef.current = [];
+    silenceGapSamplesRef.current = 0;
 
     const inputRate = audioCtxRef.current?.sampleRate ?? 44100;
+    const { rms, peak } = pcmWindowSignalStats(merged);
+    if (rms < SILENCE_RMS_MAX && peak < SILENCE_PEAK_MAX) {
+      if (import.meta.env.DEV) {
+        console.debug('[ASTRA] skip silent utterance (no STT)', {
+          rms: rms.toFixed(5),
+          peak: peak.toFixed(5),
+        });
+      }
+      return null;
+    }
+
     const resampled = downsample(merged, inputRate, TARGET_SAMPLE_RATE);
     const pcm16 = float32ToInt16(resampled);
-
     const durationSeconds = resampled.length / TARGET_SAMPLE_RATE;
 
     if (import.meta.env.DEV) {
       console.debug(
-        `[ASTRA] audio chunk: ${durationSeconds.toFixed(1)}s, ` +
+        `[ASTRA] pause-based chunk: ${durationSeconds.toFixed(2)}s, ` +
           `${pcm16.byteLength} bytes PCM16 @ ${TARGET_SAMPLE_RATE}Hz`,
       );
     }
 
     const sessionId = backendSessionIdRef.current;
-    if (sessionId) {
-      const wavBlob = pcm16ToWavBlob(pcm16, TARGET_SAMPLE_RATE);
-      return enqueueChunkUpload(sessionId, wavBlob, durationSeconds);
-    }
-
-    return null;
+    if (!sessionId) return null;
+    const wavBlob = pcm16ToWavBlob(pcm16, TARGET_SAMPLE_RATE);
+    return enqueueChunkUpload(sessionId, wavBlob, durationSeconds);
   }, [enqueueChunkUpload]);
+
+  useEffect(() => {
+    flushPendingUtteranceRef.current = flushPendingUtterance;
+  }, [flushPendingUtterance]);
 
   // ── Audio pipeline setup / teardown ──
 
@@ -307,11 +349,35 @@ export function useWhisper() {
     source.connect(analyser);
     analyserRef.current = analyser;
 
-    // ScriptProcessorNode captures raw PCM for chunking
+    utterancePcmPartsRef.current = [];
+    silenceGapSamplesRef.current = 0;
+
+    // ScriptProcessorNode: pause-based utterance detection (flush after ~1s silence)
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     processor.onaudioprocess = (e) => {
       if (!isActiveRef.current) return;
-      pcmBufferRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      const inputRate = audioCtxRef.current?.sampleRate ?? 44100;
+      const buf = new Float32Array(e.inputBuffer.getChannelData(0));
+      const stats = pcmWindowSignalStats(buf);
+      const isSpeech = stats.rms >= SILENCE_RMS_MAX || stats.peak >= SILENCE_PEAK_MAX;
+      const pauseSamples = Math.floor(inputRate * PAUSE_TO_FLUSH_SEC);
+
+      if (isSpeech) {
+        utterancePcmPartsRef.current.push(buf);
+        silenceGapSamplesRef.current = 0;
+        const total = utterancePcmPartsRef.current.reduce((n, c) => n + c.length, 0);
+        if (total >= Math.floor(inputRate * MAX_UTTERANCE_SEC)) {
+          void flushPendingUtteranceRef.current?.();
+        }
+      } else {
+        silenceGapSamplesRef.current += buf.length;
+        if (
+          utterancePcmPartsRef.current.length > 0 &&
+          silenceGapSamplesRef.current >= pauseSamples
+        ) {
+          void flushPendingUtteranceRef.current?.();
+        }
+      }
     };
     source.connect(processor);
 
@@ -322,21 +388,11 @@ export function useWhisper() {
     silentGain.connect(ctx.destination);
     processorRef.current = processor;
 
-    // Periodically flush buffered PCM into discrete chunks
-    chunkTimerRef.current = setInterval(() => {
-      if (isActiveRef.current) flushChunk();
-    }, CHUNK_INTERVAL_MS);
-
     startLevelMonitor();
-  }, [flushChunk, startLevelMonitor]);
+  }, [startLevelMonitor]);
 
   const teardownAudio = useCallback(() => {
     stopLevelMonitor();
-
-    if (chunkTimerRef.current) {
-      clearInterval(chunkTimerRef.current);
-      chunkTimerRef.current = null;
-    }
 
     processorRef.current?.disconnect();
     processorRef.current = null;
@@ -350,7 +406,8 @@ export function useWhisper() {
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     mediaStreamRef.current = null;
 
-    pcmBufferRef.current = [];
+    utterancePcmPartsRef.current = [];
+    silenceGapSamplesRef.current = 0;
   }, [stopLevelMonitor]);
 
   // ── Main control functions ──
@@ -398,7 +455,7 @@ export function useWhisper() {
           }
 
           if (msg.event === 'transcript.chunk.ready') {
-            // Streaming delta from OpenAI for the current 3s chunk. We render
+            // Streaming delta from OpenAI for the current pause-based chunk. We render
             // it combined with whatever we've accumulated from previous chunks
             // in the same (in-progress) sentence, so the typewriter sees the
             // full running sentence as its target.
@@ -411,7 +468,7 @@ export function useWhisper() {
             const display = mergeSentenceText(sentenceBaseRef.current, transcript);
             upsertStreamingRef.current(sentenceIdRef.current, display, false);
           } else if (msg.event === 'stt.task.done') {
-            // One 3s chunk finished. Append its final text to the sentence
+            // One utterance chunk finished. Append its final text to the sentence
             // buffer. If the buffer now ends with sentence-terminating
             // punctuation (or has grown too long), finalize the entry and
             // start a new sentence for the next chunk. Otherwise keep the
@@ -492,6 +549,7 @@ export function useWhisper() {
 
   const pauseRecording = useCallback(() => {
     isActiveRef.current = false;
+    void flushPendingUtteranceRef.current?.();
 
     // Suspend the AudioContext to pause microphone processing
     audioCtxRef.current?.suspend();
@@ -513,8 +571,8 @@ export function useWhisper() {
   const stopRecording = useCallback(async () => {
     isActiveRef.current = false;
 
-    // Flush any remaining buffered audio
-    const finalUpload = flushChunk();
+    // Flush any remaining buffered speech (may lack a trailing 1s pause)
+    const finalUpload = flushPendingUtterance();
 
     // Finalize any in-progress sentence so it doesn't stay stuck as
     // "processing" in the UI after the mic is released.
@@ -573,7 +631,7 @@ export function useWhisper() {
     showSavedToast,
     setSessionStartTime,
     teardownAudio,
-    flushChunk,
+    flushPendingUtterance,
   ]);
 
   // Cleanup on unmount

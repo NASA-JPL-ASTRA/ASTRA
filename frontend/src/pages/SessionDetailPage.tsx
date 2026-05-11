@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  Check,
   Download,
   Loader2,
   MessageSquareText,
-  Pencil,
   Search,
   Send,
 } from 'lucide-react';
-import { exportNotes, getSession, listNotes } from '../services/api';
+import { exportNotes, getSession, getStructureNote, listNotes } from '../services/api';
 import type { BackendSession } from '../services/api';
-import type { BackendNote } from '../types';
+import { connectSessionWs } from '../services/sessionWs';
+import type { BackendNote, StructureNoteDetailParagraph, StructureNoteDocument } from '../types';
 
 const SPEAKER_COLORS = ['#00d4ff', '#00e676', '#b388ff', '#ffab00', '#ff5252'];
 
@@ -101,6 +101,47 @@ const DEMO_NOTES: BackendNote[] = [
   },
 ];
 
+const DEMO_STRUCTURE_NOTE: StructureNoteDocument = {
+  schema_version: '0.1',
+  session_id: 'preview',
+  updated_at: '2026-04-27T15:53:35+00:00',
+  telemetry_time_format: 'ISO 8601 with timezone (e.g. 2026-05-07T12:01:16+00:00)',
+  test_summary: {
+    status: 'ready',
+    generated_at: '2026-04-27T15:53:40+00:00',
+    content_markdown:
+      'Dry run completed: microphone capture, transcript grouping, and structure note layout validated.',
+  },
+  anomalies: [
+    {
+      id: 'anom_demo',
+      recorded_at: '2026-04-27T15:50:00+00:00',
+      user_utterance_raw: '幫我記下來，右後輪有異音',
+      title: '右後輪異音',
+      description: '使用者口述異常，待後續確認。',
+      severity: 'med',
+    },
+  ],
+  detail_notes: {
+    paragraphs: [
+      {
+        id: 'para_demo_1',
+        updated_at: '2026-04-27T15:49:00+00:00',
+        time_anchor: '2026-04-27T15:49:00+00:00',
+        bullet_markdown: '• 2026-04-27T15:49:00+00:00 完成麥克風與轉寫路徑測試',
+        source_transcript_excerpt: 'Hi everyone, my name is Ryan...',
+      },
+      {
+        id: 'para_demo_2',
+        updated_at: '2026-04-27T15:52:00+00:00',
+        time_anchor: '2026-04-27T15:52:00+00:00',
+        bullet_markdown: '• 2026-04-27T15:52:00+00:00 討論 structured note 與逐字稿分離顯示',
+        source_transcript_excerpt: 'We should summarize action items...',
+      },
+    ],
+  },
+};
+
 interface TranscriptBlock {
   id: string;
   speaker: string;
@@ -142,6 +183,47 @@ function formatTime(dateStr: string): string {
   });
 }
 
+/** Backend may still emit a duplicate heading; the page already shows "Test summary". */
+function stripDuplicateSummaryHeading(markdown: string): string {
+  return markdown.replace(/^\s*#{1,6}\s*test\s*summary\s*(\([^)]*\))?\s*\n+/i, '').trimStart();
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function detailNoteTimestamp(p: Pick<StructureNoteDetailParagraph, 'time_anchor' | 'updated_at'>): string {
+  return (p.time_anchor || p.updated_at || '').trim();
+}
+
+/**
+ * Single body line for UI: prefer raw excerpt; otherwise strip "• {ISO} —" from bullet_markdown.
+ */
+function detailNoteBodyText(p: StructureNoteDetailParagraph): string {
+  const excerpt = (p.source_transcript_excerpt || '').trim();
+  if (excerpt) return excerpt;
+  const anchor = (p.time_anchor || '').trim();
+  const bullet = (p.bullet_markdown || '').trim();
+  if (anchor && bullet) {
+    const prefixRe = new RegExp(
+      `^\\s*[•\\-*]\\s*${escapeRegExp(anchor)}\\s*(?:[—:]\\s*|\\s+-\\s+)?`,
+      'u',
+    );
+    const stripped = bullet.replace(prefixRe, '').trim();
+    if (stripped) return stripped;
+  }
+  return bullet
+    .replace(/^\s*[•*-]\s*/, '')
+    .replace(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\s*(?:[—:]\s*)?/i,
+      '',
+    )
+    .trim();
+}
+
+const STRUCTURE_MD_BODY_CLASS =
+  'structure-md text-[15px] leading-7 text-text-secondary [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-text-primary [&_a]:text-accent-cyan [&_a]:underline [&_code]:rounded [&_code]:bg-space-black/50 [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-text-primary [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-text-primary [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-text-primary';
+
 function speakerColor(speaker: string, speakers: string[]): string {
   const idx = Math.max(0, speakers.indexOf(speaker));
   return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
@@ -172,50 +254,6 @@ function groupTranscript(notes: BackendNote[]): TranscriptBlock[] {
   return blocks;
 }
 
-function buildInitialSummary(notes: BackendNote[]): string {
-  if (notes.length === 0) {
-    return [
-      'Overview',
-      '',
-      'No transcript content is available yet.',
-      '',
-      'Key Points',
-      '',
-      '- ',
-      '',
-      'Decisions',
-      '',
-      '- ',
-      '',
-      'Action Items',
-      '',
-      '- ',
-    ].join('\n');
-  }
-
-  const firstSpeaker = notes[0].speaker || 'Unknown';
-  return [
-    'Overview',
-    '',
-    `This session captured a short discussion led by ${firstSpeaker}. The raw transcript is preserved on the right, while this area is intended for the cleaned meeting summary.`,
-    '',
-    'Key Points',
-    '',
-    '- The session tested browser microphone transcription and structured note review.',
-    '- The desired workflow separates polished notes from raw transcript text.',
-    '',
-    'Decisions',
-    '',
-    '- Use a document-style meeting summary as the primary editing surface.',
-    '- Keep transcript material available as source context instead of displaying every note as a large row.',
-    '',
-    'Action Items',
-    '',
-    '- Connect this editor to a persistent structured-note backend model.',
-    '- Add quote-from-transcript interactions after the layout is approved.',
-  ].join('\n');
-}
-
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -224,8 +262,8 @@ export default function SessionDetailPage() {
 
   const [session, setSession] = useState<BackendSession | null>(null);
   const [notes, setNotes] = useState<BackendNote[]>([]);
+  const [structureNote, setStructureNote] = useState<StructureNoteDocument | null>(null);
   const [title, setTitle] = useState('');
-  const [summary, setSummary] = useState('');
   const [query, setQuery] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [summaryWidth, setSummaryWidth] = useState(58);
@@ -234,12 +272,12 @@ export default function SessionDetailPage() {
     {
       id: 'assistant_initial',
       role: 'assistant',
-      content: 'Ask me to rewrite, shorten, extract action items, or check the summary against the transcript.',
+      content:
+        'Debug: structured note blocks are driven by the backend document. A future endpoint can rewrite them from prompts.',
     },
   ]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(true);
 
   useEffect(() => {
     if (!id) return;
@@ -259,11 +297,25 @@ export default function SessionDetailPage() {
         setSession(loadedSession);
         setNotes(loadedNotes);
         setTitle(`${loadedSession.name} Meeting Summary`);
-        setSummary(buildInitialSummary(loadedNotes));
-        setSaved(true);
+        if (isPreview) {
+          setStructureNote(DEMO_STRUCTURE_NOTE);
+        } else {
+          try {
+            const sn = await getStructureNote(sessionId);
+            if (!cancelled) setStructureNote(sn);
+          } catch {
+            if (!cancelled) setStructureNote(null);
+          }
+        }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load session');
+          const raw = err instanceof Error ? err.message : 'Failed to load session';
+          const is404 = /\b404\b/.test(raw) || raw.toLowerCase().includes('not found');
+          setError(
+            is404
+              ? 'Session not found (HTTP 404). The dev server stores data in memory — after a backend restart, open Home and start a new recording.'
+              : raw,
+          );
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -274,6 +326,20 @@ export default function SessionDetailPage() {
     return () => {
       cancelled = true;
     };
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || id === 'preview') return;
+    const conn = connectSessionWs(id, {
+      onMessage: (msg) => {
+        if (msg.event === 'structure_note.updated') {
+          getStructureNote(id)
+            .then(setStructureNote)
+            .catch(() => {});
+        }
+      },
+    });
+    return () => conn.close();
   }, [id]);
 
   const speakers = useMemo(
@@ -294,17 +360,20 @@ export default function SessionDetailPage() {
 
   const handleTitleChange = (value: string) => {
     setTitle(value);
-    setSaved(false);
   };
 
-  const handleSummaryChange = (value: string) => {
-    setSummary(value);
-    setSaved(false);
-  };
-
-  const handleMarkSaved = () => {
-    setSaved(true);
-  };
+  const handleRefreshStructureNote = useCallback(async () => {
+    if (!id || id === 'preview') {
+      setStructureNote(DEMO_STRUCTURE_NOTE);
+      return;
+    }
+    try {
+      const sn = await getStructureNote(id);
+      setStructureNote(sn);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [id]);
 
   const startColumnResize = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -368,9 +437,29 @@ export default function SessionDetailPage() {
   const handleExportMarkdown = useCallback(async () => {
     if (!id) return;
     if (id === 'preview') {
-      const text = `# ${title}\n\n${summary}\n\n## Transcript\n\n${transcriptBlocks
-        .map((block) => `### ${formatTime(block.timestamp)} ${block.speaker}\n\n${block.content}`)
-        .join('\n\n')}`;
+      const sn = structureNote ?? DEMO_STRUCTURE_NOTE;
+      const parts = [
+        `# ${title}`,
+        '',
+        '## 1. Test summary',
+        sn.test_summary.content_markdown || '(empty)',
+        '',
+        '## 2. Anomalies',
+        ...sn.anomalies.map((a) => `- **${a.title}** (${a.recorded_at}): ${a.description}`),
+        '',
+        '## 3. Detail notes',
+        ...sn.detail_notes.paragraphs.map((p) => {
+          const ts = detailNoteTimestamp(p);
+          const body = detailNoteBodyText(p);
+          return `### ${ts}\n\n${body}`;
+        }),
+        '',
+        '## Transcript',
+        ...transcriptBlocks.map(
+          (block) => `### ${formatTime(block.timestamp)} ${block.speaker}\n\n${block.content}`,
+        ),
+      ];
+      const text = parts.join('\n\n');
       const blob = new Blob([text], { type: 'text/markdown' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -393,7 +482,7 @@ export default function SessionDetailPage() {
     } catch (err) {
       console.error('Export failed:', err);
     }
-  }, [id, session?.name, summary, title, transcriptBlocks]);
+  }, [id, session?.name, structureNote, title, transcriptBlocks]);
 
   if (loading) {
     return (
@@ -444,21 +533,17 @@ export default function SessionDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div
-              className={`flex items-center gap-1.5 px-2 py-1 text-xs ${
-                saved
-                  ? 'text-accent-green'
-                  : 'text-accent-amber'
-              }`}
-            >
-              {saved ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
-              {saved ? 'Saved' : 'Unsaved'}
-            </div>
+            {structureNote && (
+              <span className="hidden text-xs text-text-muted sm:inline">
+                Structure note updated: {structureNote.updated_at}
+              </span>
+            )}
             <button
-              onClick={handleMarkSaved}
+              type="button"
+              onClick={handleRefreshStructureNote}
               className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
             >
-              Save
+              Reload note
             </button>
             <button
               onClick={handleExportMarkdown}
@@ -477,18 +562,96 @@ export default function SessionDetailPage() {
         style={{ gridTemplateColumns: `${summaryWidth}% 6px minmax(190px, 1fr)` }}
       >
         <section className="min-h-0 overflow-y-scroll bg-space-black px-6 py-7">
-          <div className="mx-auto max-w-4xl">
-            <label className="mb-5 block text-[11px] font-medium uppercase tracking-wider text-text-muted">
-              Meeting Summary
-            </label>
+          <div className="mx-auto max-w-4xl space-y-10 pb-16">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-text-muted">
+              Structured note
+            </p>
 
-            <textarea
-              value={summary}
-              onChange={(event) => handleSummaryChange(event.target.value)}
-              spellCheck
-              className="min-h-[calc(100vh-18rem)] w-full resize-none border-0 bg-transparent text-[15px] leading-8 text-text-primary outline-none placeholder:text-text-muted"
-              placeholder="Write the meeting summary here..."
-            />
+            <div>
+              <h2 className="mb-2 text-sm font-semibold text-text-primary">1. Test summary</h2>
+              {session.status !== 'ended' ? (
+                <div className="rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
+                  Recording still active. End the session to generate the test summary.
+                </div>
+              ) : structureNote?.test_summary.status === 'generating' ? (
+                <div className="flex items-center gap-2 rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating test summary…
+                </div>
+              ) : structureNote?.test_summary.status === 'ready' ? (
+                <div
+                  className={`rounded-lg border border-space-border/60 bg-space-card/30 px-4 py-3 ${STRUCTURE_MD_BODY_CLASS}`}
+                >
+                  <ReactMarkdown>
+                    {stripDuplicateSummaryHeading(
+                      structureNote.test_summary.content_markdown || '',
+                    )}
+                  </ReactMarkdown>
+                </div>
+              ) : structureNote?.test_summary.status === 'error' ? (
+                <div className="rounded-lg border border-red-500/40 bg-red-950/20 px-4 py-3 text-sm text-red-200">
+                  {structureNote.test_summary.error || 'Generation failed'}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
+                  Waiting for summary — if you just ended the session, wait a moment or click Reload
+                  note.
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h2 className="mb-2 text-sm font-semibold text-text-primary">2. Anomalies</h2>
+              {!structureNote || structureNote.anomalies.length === 0 ? (
+                <p className="text-sm text-text-muted">No anomaly entries yet.</p>
+              ) : (
+                <ol className="ml-5 list-decimal space-y-4 pl-1 text-[15px] leading-snug text-text-secondary marker:font-medium marker:text-text-primary">
+                  {structureNote.anomalies.map((a) => {
+                    const desc = (a.description || '').trim();
+                    const title = (a.title || '').trim();
+                    const showSecondLine = desc.length > 0 && desc !== title;
+                    return (
+                      <li key={a.id} className="pl-1">
+                        <div className="text-text-primary">
+                          <span className="font-medium">{title || 'Issue'}</span>
+                          <span className="text-text-muted">, time: {a.recorded_at}</span>
+                        </div>
+                        {showSecondLine ? (
+                          <div className="mt-1 whitespace-pre-wrap text-sm text-text-secondary">
+                            {desc}
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </div>
+
+            <div>
+              <h2 className="mb-2 text-sm font-semibold text-text-primary">3. Detail notes</h2>
+              {!structureNote || structureNote.detail_notes.paragraphs.length === 0 ? (
+                <p className="text-sm text-text-muted">
+                  No paragraphs yet — they accumulate when STT chunks are processed.
+                </p>
+              ) : (
+                <ul className="space-y-4 text-[15px] leading-7 text-text-secondary">
+                  {structureNote.detail_notes.paragraphs.map((p) => (
+                    <li key={p.id} className="rounded-lg border border-space-border/50 bg-space-card/20 px-3 py-2">
+                      <time
+                        className="mb-1.5 block text-xs tabular-nums tracking-tight text-text-muted"
+                        dateTime={p.time_anchor || undefined}
+                      >
+                        {detailNoteTimestamp(p)}
+                      </time>
+                      <div className="whitespace-pre-wrap text-[15px] leading-7 text-text-primary">
+                        {detailNoteBodyText(p)}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </section>
 

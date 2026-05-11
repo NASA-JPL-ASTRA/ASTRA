@@ -9,6 +9,7 @@ from typing import Dict, List, Any
 
 sessions_db:   Dict[str, dict] = {}
 notes_db:      Dict[str, dict] = {}
+structure_notes_db: Dict[str, dict] = {}  # session_id -> StructureNoteDocument as dict
 telemetry_db:  List[dict]      = []
 stt_tasks_db:  Dict[str, dict] = {}   # NEW: STT task storage
 

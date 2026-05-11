@@ -27,11 +27,17 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env          # then fill in OPENAI_API_KEY
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
 ```
 
+**Why `--reload-dir app`:** On Windows (especially with OneDrive), files under `venv/` can be
+touched by indexing or antivirus. The default `--reload` watches the whole working tree, so
+WatchFiles may see thousands of `venv\Lib\site-packages\...` changes and **reload in a tight loop**,
+which looks like “many errors” (`KeyboardInterrupt` / `CancelledError` during shutdown). Limiting
+the watch to `app/` avoids that.
+
 Use the same virtualenv for `uvicorn` as for `pip install` (e.g. `source venv/bin/activate` before
-running the command, or `venv/bin/uvicorn app.main:app --reload`). If you see
+running the command, or `venv/bin/uvicorn app.main:app --reload --reload-dir app`). If you see
 `ModuleNotFoundError: No module named 'influxdb_client'`, the optional telemetry query
 dependencies were not installed in **that** interpreter — run `pip install -r requirements.txt`
 again inside the activated venv.
@@ -49,7 +55,7 @@ up automatically without exporting variables in your shell.
 | `OPENAI_API_KEY`             | ✅ | —                              | OpenAI key |
 | `OPENAI_API_BASE_URL`        |    | `https://api.openai.com/v1`    | Override for proxy / Azure |
 | `OPENAI_STT_MODEL`           |    | `gpt-4o-mini-transcribe`       | `gpt-4o-mini-transcribe` \| `gpt-4o-transcribe` \| `gpt-4o-transcribe-diarize` |
-| `OPENAI_STT_LANGUAGE`        |    | (auto-detect)                  | ISO-639-1, e.g. `en`, `zh` |
+| `OPENAI_STT_LANGUAGE`        |    | `en`                           | ISO-639-1; project default English. Set empty in `.env` only if you need auto-detect. |
 | `OPENAI_STT_PROMPT`          |    | —                              | Priming prompt for jargon / names |
 | `OPENAI_STT_TIMEOUT_SECONDS` |    | `120`                          | HTTP timeout for OpenAI calls |
 

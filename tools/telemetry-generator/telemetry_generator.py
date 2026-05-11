@@ -7,7 +7,7 @@ import os
 import csv
 import time
 from datetime import datetime
-from typing import List, Any
+from typing import List, Any, Optional
 import numpy as np
 
 
@@ -53,12 +53,18 @@ class TelemetryLogger:
         """
         self.event_buffer.append((timestamp, evr_name, severity, message))
 
-    def flush(self):
-        """Write all buffered telemetry to disk."""
+    def flush(self, align_end_unix: Optional[float] = None):
+        """
+        Write all buffered telemetry to disk.
+
+        Args:
+            align_end_unix: If set, the last row in each log is aligned to this Unix
+                epoch (seconds). If None, uses current time (device wall clock).
+        """
         sorted_channel_rows = sorted(self.channel_buffer)
         sorted_event_rows = sorted(self.event_buffer)
-        rebased_channel_rows = self._rebase_timestamps(sorted_channel_rows)
-        rebased_event_rows = self._rebase_timestamps(sorted_event_rows)
+        rebased_channel_rows = self._rebase_timestamps(sorted_channel_rows, align_end_unix=align_end_unix)
+        rebased_event_rows = self._rebase_timestamps(sorted_event_rows, align_end_unix=align_end_unix)
 
         # Write channel log (no header)
         with open(self.channel_log_path, "w", newline="") as f:
@@ -75,16 +81,21 @@ class TelemetryLogger:
         print(f"Wrote {len(self.channel_buffer)} channel samples to {self.channel_log_path}")
         print(f"Wrote {len(self.event_buffer)} events to {self.event_log_path}")
 
-    def _rebase_timestamps(self, rows: List[tuple], interval_seconds: int = 2) -> List[tuple]:
+    def _rebase_timestamps(
+        self,
+        rows: List[tuple],
+        interval_seconds: int = 2,
+        align_end_unix: Optional[float] = None,
+    ) -> List[tuple]:
         """
-        Rebuild timestamps so the latest row aligns to current device time.
+        Rebuild timestamps so the latest row aligns to align_end_unix or current time.
 
         Each earlier row is offset by 2 seconds from the next row.
         """
         if not rows:
             return []
 
-        aligned_now = time.time()
+        aligned_now = align_end_unix if align_end_unix is not None else time.time()
         total_rows = len(rows)
         rebased_rows = []
 

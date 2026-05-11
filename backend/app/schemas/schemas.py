@@ -44,6 +44,7 @@ class SessionResponse(BaseModel):
     started_at:  datetime
     ended_at:    Optional[datetime]
     note_count:  int = 0
+    telemetry_mock_test1_path: Optional[str] = None
 
 
 # ============ Note Schemas ============

@@ -7,7 +7,7 @@ import numpy as np
 from telemetry_generator import RoverSimulator, TelemetryLogger
 
 
-def scenario_1_straight_line_bumps(output_dir: str):
+def scenario_1_straight_line_bumps(output_dir: str, align_flush_unix: float | None = None):
     """
     Test 1: Straight line driving with bumps (5 minutes)
 
@@ -66,7 +66,7 @@ def scenario_1_straight_line_bumps(output_dir: str):
     for _ in range(20):
         rover.update(dt)
 
-    logger.flush()
+    logger.flush(align_end_unix=align_flush_unix)
     print(f"Final position: y={rover.position[1]:.1f}m")
 
 

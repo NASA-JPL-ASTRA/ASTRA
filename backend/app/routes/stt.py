@@ -27,13 +27,19 @@ import uuid
 from app.schemas import STTTaskCreate, STTTaskUpdate, STTTaskResponse
 from app.database import stt_tasks_db, notes_db, get_session, get_stt_tasks_by_session
 from app.ws_manager import (
-    broadcast, broadcast_error,
-    EVENT_STT_TASK_CREATED, EVENT_STT_TASK_DONE, EVENT_NOTE_CREATED, EVENT_STT_CHUNK_READY,
+    broadcast,
+    broadcast_error,
+    EVENT_STT_TASK_CREATED,
+    EVENT_STT_TASK_DONE,
+    EVENT_NOTE_CREATED,
+    EVENT_STT_CHUNK_READY,
+    EVENT_STRUCTURE_NOTE_UPDATED,
 )
 from app.services.openai_stt import (
     SUPPORTED_STT_MODELS,
     OpenAIStreamingTranscriptionService,
 )
+from app.services.transcript_quality import transcript_qualifies_for_notes
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,7 +53,7 @@ def utcnow() -> datetime:
 
 async def _create_auto_note(sid: str, transcript: str) -> Optional[dict]:
     cleaned = transcript.strip()
-    if not cleaned:
+    if not transcript_qualifies_for_notes(cleaned):
         return None
 
     note_id = f"note_{uuid.uuid4().hex[:8]}"
@@ -67,6 +73,33 @@ async def _create_auto_note(sid: str, transcript: str) -> Optional[dict]:
     notes_db[note_id] = new_note
     await broadcast(sid, EVENT_NOTE_CREATED, new_note)
     return new_note
+
+
+async def _sync_structure_note_from_transcript(sid: str, transcript: str) -> None:
+    """
+    Merge transcript into the session structure note (detail + optional anomaly).
+    Heuristic: common Chinese/English phrases imply user asked to log an issue.
+    """
+    from app.schemas.structure_note import document_to_storage_dict
+    from app.services.structure_note_engine import apply_voice_chunk
+
+    text = transcript.strip()
+    if not transcript_qualifies_for_notes(text):
+        return
+    tl = text.lower()
+    request_anomaly = any(m in text for m in ("記下來", "幫我記", "問題", "異常")) or any(
+        m in tl
+        for m in (
+            "please log",
+            "log this for me",
+            "log this",
+            "remember this",
+            "anomaly",
+            "knocking",
+        )
+    )
+    doc = apply_voice_chunk(sid, text, request_anomaly_capture=request_anomaly)
+    await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, document_to_storage_dict(doc))
 
 
 async def _transcribe_uploaded_audio(
@@ -108,6 +141,7 @@ async def _transcribe_uploaded_audio(
 
         if task["transcript"]:
             await _create_auto_note(sid, task["transcript"])
+            await _sync_structure_note_from_transcript(sid, task["transcript"])
     except Exception as e:
         logger.exception("OpenAI transcription failed for task %s", task["id"])
         task["status"] = "failed"
@@ -200,6 +234,9 @@ async def update_stt_task(sid: str, tid: str, update: STTTaskUpdate):
 
     if update.status == "done":
         await broadcast(sid, EVENT_STT_TASK_DONE, task)
+        tx = (update.transcript or "").strip()
+        if tx:
+            await _sync_structure_note_from_transcript(sid, tx)
     elif update.status == "failed":
         error_msg = update.error or "STT transcription failed"
         await broadcast_error(sid, error_msg, source="stt")

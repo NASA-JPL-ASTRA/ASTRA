@@ -1,5 +1,5 @@
 import { API_URL } from '../config/env';
-import type { BackendNote, NoteType } from '../types';
+import type { BackendNote, NoteType, StructureNoteDocument } from '../types';
 
 // ── Session types ──
 
@@ -11,6 +11,8 @@ export interface BackendSession {
   started_at: string;
   ended_at: string | null;
   note_count: number;
+  /** After background job: mock test_1 logs for voice/telemetry demos (repo-relative path). */
+  telemetry_mock_test1_path?: string | null;
 }
 
 // ── Generic request helper ──
@@ -131,6 +133,27 @@ export function exportNotes(
 ): Promise<string> {
   return requestText(`/sessions/${sessionId}/notes/export?format=${format}`, {
     method: 'GET',
+  });
+}
+
+// ── Structure note (per session) ──
+
+export function getStructureNote(sessionId: string): Promise<StructureNoteDocument> {
+  return request<StructureNoteDocument>(`/sessions/${sessionId}/structure-note`, {
+    method: 'GET',
+  });
+}
+
+export function postStructureNoteVoiceChunk(
+  sessionId: string,
+  payload: { transcript: string; request_anomaly_capture?: boolean },
+): Promise<StructureNoteDocument> {
+  return request<StructureNoteDocument>(`/sessions/${sessionId}/structure-note/voice-chunk`, {
+    method: 'POST',
+    body: JSON.stringify({
+      transcript: payload.transcript,
+      request_anomaly_capture: payload.request_anomaly_capture ?? false,
+    }),
   });
 }
 
