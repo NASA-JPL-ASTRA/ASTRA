@@ -8,13 +8,19 @@ Endpoints:
 
 from fastapi import APIRouter, HTTPException
 
-from app.database import get_session
+from app.database import get_session, structure_notes_db
 from app.schemas.structure_note import (
     StructureNoteDocument,
+    TestSummaryStatus,
+    TestSummaryUpdateRequest,
     VoiceChunkRequest,
     document_to_storage_dict,
 )
-from app.services.structure_note_engine import apply_voice_chunk, get_or_create_structure_note
+from app.services.structure_note_engine import (
+    apply_voice_chunk,
+    get_or_create_structure_note,
+    utc_iso_timestamp,
+)
 from app.ws_manager import EVENT_STRUCTURE_NOTE_UPDATED, broadcast
 
 router = APIRouter()
@@ -37,4 +43,23 @@ async def post_voice_chunk(sid: str, body: VoiceChunkRequest):
         request_anomaly_capture=body.request_anomaly_capture,
     )
     await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, document_to_storage_dict(doc))
+    return doc
+
+
+@router.put("/{sid}/structure-note/test-summary", response_model=StructureNoteDocument)
+async def update_test_summary(sid: str, body: TestSummaryUpdateRequest):
+    if not get_session(sid):
+        raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+
+    doc = get_or_create_structure_note(sid)
+    timestamp = utc_iso_timestamp()
+    doc.test_summary.status = TestSummaryStatus.ready
+    doc.test_summary.content_markdown = body.content_markdown.strip()
+    doc.test_summary.generated_at = timestamp
+    doc.test_summary.error = None
+    doc.updated_at = timestamp
+
+    payload = document_to_storage_dict(doc)
+    structure_notes_db[sid] = payload
+    await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, payload)
     return doc

@@ -90,6 +90,12 @@ class VoiceChunkRequest(BaseModel):
     )
 
 
+class TestSummaryUpdateRequest(BaseModel):
+    """Operator-approved replacement for the generated test summary."""
+
+    content_markdown: str = Field(..., min_length=1)
+
+
 class StructureNoteLLMOutput(BaseModel):
     """Validated shape returned by the LLM for voice-chunk updates."""
 

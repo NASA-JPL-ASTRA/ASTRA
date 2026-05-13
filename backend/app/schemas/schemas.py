@@ -47,6 +47,26 @@ class SessionResponse(BaseModel):
     telemetry_mock_test1_path: Optional[str] = None
 
 
+# ============ Summary Assistant Schemas ============
+
+class SummaryChatMessage(BaseModel):
+    role:    str
+    content: str
+
+
+class SummaryChatRequest(BaseModel):
+    prompt:   str
+    title:    Optional[str] = None
+    summary:  Optional[str] = None
+    model:    Optional[str] = None
+    messages: List[SummaryChatMessage] = Field(default_factory=list)
+
+
+class SummaryChatResponse(BaseModel):
+    message:         str
+    updated_summary: Optional[str] = None
+
+
 # ============ Note Schemas ============
 
 class NoteCreate(BaseModel):

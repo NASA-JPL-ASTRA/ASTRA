@@ -14,7 +14,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import sessions, notes, telemetry, websocket, stt, structure_notes
+from app.routes import sessions, notes, telemetry, websocket, stt, structure_notes, summaries
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ app.add_middleware(
 app.include_router(sessions.router,  prefix="/api/sessions", tags=["Sessions"])
 app.include_router(structure_notes.router, prefix="/api/sessions", tags=["Structure Notes"])
 app.include_router(notes.router,     prefix="/api/sessions", tags=["Notes"])
+app.include_router(summaries.router, prefix="/api/sessions", tags=["Summaries"])
 app.include_router(telemetry.router, prefix="/api/sessions", tags=["Telemetry"])
 app.include_router(stt.router,       prefix="/api/sessions", tags=["STT"])
 app.include_router(websocket.router, prefix="/ws/sessions",  tags=["WebSocket"])

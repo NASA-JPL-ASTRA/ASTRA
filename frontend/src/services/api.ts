@@ -157,6 +157,50 @@ export function postStructureNoteVoiceChunk(
   });
 }
 
+export function updateStructureNoteTestSummary(
+  sessionId: string,
+  contentMarkdown: string,
+): Promise<StructureNoteDocument> {
+  return request<StructureNoteDocument>(`/sessions/${sessionId}/structure-note/test-summary`, {
+    method: 'PUT',
+    body: JSON.stringify({ content_markdown: contentMarkdown }),
+  });
+}
+
+// ── Summary assistant ──
+
+export interface SummaryChatMessagePayload {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface SummaryChatResponse {
+  message: string;
+  updated_summary: string | null;
+}
+
+export function chatWithSummaryAssistant(
+  sessionId: string,
+  payload: {
+    prompt: string;
+    title?: string;
+    summary?: string;
+    model?: string;
+    messages?: SummaryChatMessagePayload[];
+  },
+): Promise<SummaryChatResponse> {
+  return request<SummaryChatResponse>(`/sessions/${sessionId}/summary/chat`, {
+    method: 'POST',
+    body: JSON.stringify({
+      prompt: payload.prompt,
+      title: payload.title,
+      summary: payload.summary,
+      model: payload.model,
+      messages: payload.messages ?? [],
+    }),
+  });
+}
+
 // ── STT Upload ──
 
 export async function uploadAudioChunk(

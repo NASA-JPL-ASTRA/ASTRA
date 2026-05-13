@@ -1,6 +1,7 @@
 from app.schemas.schemas import (
     SessionStatus, NoteType,
     SessionCreate, SessionUpdate, SessionResponse,
+    SummaryChatMessage, SummaryChatRequest, SummaryChatResponse,
     NoteCreate, NoteUpdate, NoteResponse,
     TelemetryCreate, TelemetryBatchCreate, TelemetryResponse,
     WebSocketMessage,
@@ -14,6 +15,7 @@ from app.schemas.structure_note import (
     StructureNoteDocument,
     TestSummary,
     TestSummaryStatus,
+    TestSummaryUpdateRequest,
     VoiceChunkRequest,
     TelemetryRef,
     StructureNoteLLMOutput,

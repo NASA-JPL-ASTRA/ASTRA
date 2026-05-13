@@ -3,15 +3,31 @@ import ReactMarkdown from 'react-markdown';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  Check,
   Download,
   Loader2,
   MessageSquareText,
+  RotateCcw,
   Search,
   Send,
+  Sparkles,
+  X,
 } from 'lucide-react';
-import { exportNotes, getSession, getStructureNote, listNotes } from '../services/api';
+import {
+  chatWithSummaryAssistant,
+  exportNotes,
+  getSession,
+  getStructureNote,
+  listNotes,
+  updateStructureNoteTestSummary,
+} from '../services/api';
 import type { BackendSession } from '../services/api';
 import { connectSessionWs } from '../services/sessionWs';
+import {
+  DEFAULT_SUMMARY_MODEL,
+  SUMMARY_MODEL_OPTIONS,
+  getSummaryModelLabel,
+} from '../config/summaryModels';
 import type { BackendNote, StructureNoteDetailParagraph, StructureNoteDocument } from '../types';
 
 const SPEAKER_COLORS = ['#00d4ff', '#00e676', '#b388ff', '#ffab00', '#ff5252'];
@@ -156,6 +172,8 @@ interface AiDebugMessage {
   content: string;
 }
 
+const SUMMARY_MODEL_STORAGE_KEY = 'astra.summary.model';
+
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
@@ -266,6 +284,15 @@ export default function SessionDetailPage() {
   const [title, setTitle] = useState('');
   const [query, setQuery] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
+  const [selectedSummaryModel, setSelectedSummaryModel] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_SUMMARY_MODEL;
+    return window.localStorage.getItem(SUMMARY_MODEL_STORAGE_KEY) || DEFAULT_SUMMARY_MODEL;
+  });
+  const [pendingSummaryPreview, setPendingSummaryPreview] = useState<string | null>(null);
+  const [lastAppliedSummaryBackup, setLastAppliedSummaryBackup] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [applyingPreview, setApplyingPreview] = useState(false);
+  const [revertingSummary, setRevertingSummary] = useState(false);
   const [summaryWidth, setSummaryWidth] = useState(58);
   const [transcriptHeight, setTranscriptHeight] = useState(55);
   const [aiMessages, setAiMessages] = useState<AiDebugMessage[]>([
@@ -273,7 +300,7 @@ export default function SessionDetailPage() {
       id: 'assistant_initial',
       role: 'assistant',
       content:
-        'Debug: structured note blocks are driven by the backend document. A future endpoint can rewrite them from prompts.',
+        'Ask for a rewrite, shorter version, action-focused summary, or translation. Review the preview before applying it.',
     },
   ]);
   const [loading, setLoading] = useState(true);
@@ -297,6 +324,8 @@ export default function SessionDetailPage() {
         setSession(loadedSession);
         setNotes(loadedNotes);
         setTitle(`${loadedSession.name} Meeting Summary`);
+        setPendingSummaryPreview(null);
+        setLastAppliedSummaryBackup(null);
         if (isPreview) {
           setStructureNote(DEMO_STRUCTURE_NOTE);
         } else {
@@ -357,9 +386,15 @@ export default function SessionDetailPage() {
         block.speaker.toLowerCase().includes(normalized),
     );
   }, [query, transcriptBlocks]);
+  const currentSummaryMarkdown = structureNote?.test_summary.content_markdown || '';
 
   const handleTitleChange = (value: string) => {
     setTitle(value);
+  };
+
+  const handleSummaryModelChange = (value: string) => {
+    setSelectedSummaryModel(value);
+    window.localStorage.setItem(SUMMARY_MODEL_STORAGE_KEY, value);
   };
 
   const handleRefreshStructureNote = useCallback(async () => {
@@ -413,25 +448,159 @@ export default function SessionDetailPage() {
     window.addEventListener('mouseup', stop);
   };
 
-  const handleAiPromptSubmit = () => {
+  const handleAiPromptSubmit = async () => {
     const prompt = aiPrompt.trim();
-    if (!prompt) return;
+    if (!prompt || !id || aiBusy) return;
+
+    const userMessage: AiDebugMessage = {
+      id: `user_${Date.now()}`,
+      role: 'user',
+      content: prompt,
+    };
 
     setAiMessages((prev) => [
       ...prev,
-      {
-        id: `user_${Date.now()}`,
-        role: 'user',
-        content: prompt,
-      },
-      {
-        id: `assistant_${Date.now()}`,
-        role: 'assistant',
-        content:
-          'Debug preview: this will call the summary assistant endpoint later. For now, use this box to test prompt flow and layout.',
-      },
+      userMessage,
     ]);
     setAiPrompt('');
+    setAiBusy(true);
+
+    try {
+      if (id === 'preview') {
+        const draft = [
+          stripDuplicateSummaryHeading(currentSummaryMarkdown) || 'Dry run completed.',
+          '',
+          `Requested change (${getSummaryModelLabel(selectedSummaryModel)}): ${prompt}`,
+        ].join('\n');
+        setPendingSummaryPreview(draft);
+        setAiMessages((prev) => [
+          ...prev,
+          {
+            id: `assistant_${Date.now()}`,
+            role: 'assistant',
+            content: 'I prepared a preview draft. Review it below, then apply or discard it.',
+          },
+        ]);
+        return;
+      }
+
+      const result = await chatWithSummaryAssistant(id, {
+        prompt,
+        title,
+        summary: currentSummaryMarkdown,
+        model: selectedSummaryModel,
+        messages: aiMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      });
+
+      if (result.updated_summary) {
+        setPendingSummaryPreview(result.updated_summary);
+      }
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: result.updated_summary
+            ? `${result.message}\n\nPreview is ready. Apply it when it looks right.`
+            : result.message,
+        },
+      ]);
+    } catch (err) {
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: err instanceof Error ? err.message : 'Summary assistant failed.',
+        },
+      ]);
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const replaceTestSummary = async (contentMarkdown: string): Promise<StructureNoteDocument> => {
+    if (!id) throw new Error('Missing session id');
+    if (id === 'preview') {
+      const next: StructureNoteDocument = {
+        ...(structureNote ?? DEMO_STRUCTURE_NOTE),
+        updated_at: new Date().toISOString(),
+        test_summary: {
+          ...(structureNote ?? DEMO_STRUCTURE_NOTE).test_summary,
+          status: 'ready',
+          generated_at: new Date().toISOString(),
+          content_markdown: contentMarkdown,
+          error: null,
+        },
+      };
+      setStructureNote(next);
+      return next;
+    }
+    const updated = await updateStructureNoteTestSummary(id, contentMarkdown);
+    setStructureNote(updated);
+    return updated;
+  };
+
+  const handleApplySummaryPreview = async () => {
+    if (!pendingSummaryPreview || applyingPreview) return;
+    setApplyingPreview(true);
+    try {
+      setLastAppliedSummaryBackup(currentSummaryMarkdown);
+      await replaceTestSummary(pendingSummaryPreview);
+      setPendingSummaryPreview(null);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: 'Applied the preview to the Test summary. You can revert to the previous version.',
+        },
+      ]);
+    } catch (err) {
+      setLastAppliedSummaryBackup(null);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: err instanceof Error ? err.message : 'Could not apply the preview.',
+        },
+      ]);
+    } finally {
+      setApplyingPreview(false);
+    }
+  };
+
+  const handleRevertSummary = async () => {
+    if (lastAppliedSummaryBackup === null || revertingSummary) return;
+    setRevertingSummary(true);
+    try {
+      await replaceTestSummary(lastAppliedSummaryBackup);
+      setLastAppliedSummaryBackup(null);
+      setPendingSummaryPreview(null);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: 'Reverted the Test summary to the previous version.',
+        },
+      ]);
+    } catch (err) {
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: err instanceof Error ? err.message : 'Could not revert the summary.',
+        },
+      ]);
+    } finally {
+      setRevertingSummary(false);
+    }
   };
 
   const handleExportMarkdown = useCallback(async () => {
@@ -743,20 +912,102 @@ export default function SessionDetailPage() {
             }}
           >
             <div className="mb-3">
-              <h2 className="text-sm font-medium text-text-primary">AI Summary Debug</h2>
-              <p className="mt-1 text-xs text-text-muted">
-                Test prompts before wiring the summary endpoint
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
+                    <Sparkles className="h-4 w-4 text-accent-cyan" />
+                    Note AI
+                  </h2>
+                  <p className="mt-1 text-xs text-text-muted">Draft changes before applying</p>
+                </div>
+                <select
+                  value={selectedSummaryModel}
+                  onChange={(event) => handleSummaryModelChange(event.target.value)}
+                  className="max-w-[150px] rounded-md border border-space-border/70 bg-space-black px-2 py-1 text-xs text-text-primary outline-none transition-colors hover:border-accent-cyan/50"
+                  aria-label="Summary AI model"
+                >
+                  {SUMMARY_MODEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="min-h-0 flex-1 space-y-3 overflow-y-scroll pr-1" style={{ scrollbarGutter: 'stable' }}>
+              {pendingSummaryPreview && (
+                <section className="rounded-md border border-accent-cyan/40 bg-accent-cyan/5">
+                  <div className="flex items-center justify-between gap-2 border-b border-accent-cyan/20 px-3 py-2">
+                    <div>
+                      <h3 className="text-xs font-medium text-text-primary">Preview</h3>
+                      <p className="mt-0.5 text-[11px] text-text-muted">
+                        Generated with {getSummaryModelLabel(selectedSummaryModel)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPendingSummaryPreview(null)}
+                        className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-space-card hover:text-text-primary"
+                        aria-label="Discard preview"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleApplySummaryPreview}
+                        disabled={applyingPreview}
+                        className="rounded-md p-1.5 text-accent-cyan transition-colors hover:bg-accent-cyan/10 disabled:opacity-40"
+                        aria-label="Apply preview"
+                      >
+                        {applyingPreview ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Check className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`max-h-64 overflow-y-auto px-3 py-2 ${STRUCTURE_MD_BODY_CLASS}`}>
+                    <ReactMarkdown>
+                      {stripDuplicateSummaryHeading(pendingSummaryPreview)}
+                    </ReactMarkdown>
+                  </div>
+                </section>
+              )}
+
+              {lastAppliedSummaryBackup !== null && (
+                <section className="flex items-center justify-between gap-3 rounded-md border border-space-border/70 bg-space-card/30 px-3 py-2">
+                  <div>
+                    <p className="text-xs font-medium text-text-primary">Previous version saved</p>
+                    <p className="mt-0.5 text-[11px] text-text-muted">
+                      Revert will restore the summary from before your last apply.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRevertSummary}
+                    disabled={revertingSummary}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary disabled:opacity-40"
+                  >
+                    {revertingSummary ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    )}
+                    Revert
+                  </button>
+                </section>
+              )}
+
               {aiMessages.map((message) => (
                 <div
                   key={message.id}
                   className={
                     message.role === 'user'
                       ? 'ml-5 rounded-md bg-space-card/70 px-3 py-2 text-sm leading-5 text-text-primary'
-                      : 'mr-5 text-sm leading-5 text-text-secondary'
+                      : 'mr-5 whitespace-pre-wrap text-sm leading-5 text-text-secondary'
                   }
                 >
                   {message.content}
@@ -780,11 +1031,11 @@ export default function SessionDetailPage() {
               />
               <button
                 onClick={handleAiPromptSubmit}
-                disabled={!aiPrompt.trim()}
+                disabled={!aiPrompt.trim() || aiBusy}
                 className="rounded-md p-2 text-text-muted transition-colors hover:bg-space-card hover:text-text-primary disabled:opacity-30"
                 aria-label="Send AI prompt"
               >
-                <Send className="h-4 w-4" />
+                {aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </button>
             </div>
           </div>
