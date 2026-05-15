@@ -3,7 +3,11 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  ChevronDown,
   Check,
+  FileCode2,
+  FileJson,
+  FileText,
   Download,
   Mic,
   Pause,
@@ -22,7 +26,6 @@ import {
 import {
   autoUpdateStructureNoteTestSummary,
   chatWithSummaryAssistant,
-  exportNotes,
   getSession,
   getStructureNote,
   listNotes,
@@ -182,6 +185,8 @@ interface AiDebugMessage {
   content: string;
 }
 
+type ExportFormat = 'markdown' | 'html' | 'json';
+
 const SUMMARY_MODEL_STORAGE_KEY = 'astra.summary.model';
 
 function autoUpdateCursorStorageKey(sessionId: string): string {
@@ -270,6 +275,174 @@ function structureMarkdownUrlTransform(value: string, key: string): string {
   return defaultUrlTransform(value);
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeFileName(value: string): string {
+  const cleaned = value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
+  return cleaned || 'structured-note';
+}
+
+function downloadTextFile(text: string, fileName: string, mimeType: string) {
+  const blob = new Blob([text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildStructuredNoteMarkdown(
+  title: string,
+  session: BackendSession,
+  sn: StructureNoteDocument,
+  transcriptBlocks: TranscriptBlock[],
+): string {
+  const parts = [
+    `# ${title}`,
+    '',
+    `**Session ID:** ${session.id}`,
+    `**Started:** ${session.started_at}`,
+    session.ended_at ? `**Ended:** ${session.ended_at}` : '',
+    `**Status:** ${session.status}`,
+    '',
+    '## 1. Test summary',
+    sn.test_summary.content_markdown || '(empty)',
+    '',
+    '## 2. Anomalies',
+    sn.anomalies.length
+      ? sn.anomalies
+          .map((a) => `- **${a.title || 'Issue'}** (${a.recorded_at}): ${a.description}`)
+          .join('\n')
+      : 'No anomaly entries.',
+    '',
+    '## 3. Detail notes',
+    sn.detail_notes.paragraphs.length
+      ? sn.detail_notes.paragraphs
+          .map((p) => {
+            const ts = detailNoteTimestamp(p);
+            const body = detailNoteBodyText(p) || '(empty)';
+            return `### ${ts}\n\n${body}`;
+          })
+          .join('\n\n')
+      : 'No detail notes.',
+    '',
+    '## Transcript',
+    transcriptBlocks.length
+      ? transcriptBlocks
+          .map((block) => `### ${formatTime(block.timestamp)} ${block.speaker}\n\n${block.content}`)
+          .join('\n\n')
+      : 'No transcript entries.',
+  ];
+
+  return parts.filter((part) => part !== '').join('\n\n');
+}
+
+async function renderMarkdownForExport(markdown: string): Promise<string> {
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  return renderToStaticMarkup(
+    <ReactMarkdown urlTransform={structureMarkdownUrlTransform}>
+      {stripDuplicateSummaryHeading(markdown)}
+    </ReactMarkdown>,
+  );
+}
+
+async function buildStructuredNoteHtml(
+  title: string,
+  session: BackendSession,
+  sn: StructureNoteDocument,
+  transcriptBlocks: TranscriptBlock[],
+): Promise<string> {
+  const summaryHtml = await renderMarkdownForExport(sn.test_summary.content_markdown || '(empty)');
+  const anomaliesHtml = sn.anomalies.length
+    ? `<ol>${sn.anomalies
+        .map(
+          (a) =>
+            `<li><strong>${escapeHtml(a.title || 'Issue')}</strong> <span class="muted">${escapeHtml(
+              a.recorded_at,
+            )}</span><p>${escapeHtml(a.description || '')}</p></li>`,
+        )
+        .join('')}</ol>`
+    : '<p class="muted">No anomaly entries.</p>';
+  const detailsHtml = sn.detail_notes.paragraphs.length
+    ? sn.detail_notes.paragraphs
+        .map(
+          (p) =>
+            `<article><h3>${escapeHtml(detailNoteTimestamp(p))}</h3><p>${escapeHtml(
+              detailNoteBodyText(p) || '(empty)',
+            )}</p></article>`,
+        )
+        .join('')
+    : '<p class="muted">No detail notes.</p>';
+  const transcriptHtml = transcriptBlocks.length
+    ? transcriptBlocks
+        .map(
+          (block) =>
+            `<article><h3>${escapeHtml(formatTime(block.timestamp))} ${escapeHtml(
+              block.speaker,
+            )}</h3><p>${escapeHtml(block.content)}</p></article>`,
+        )
+        .join('')
+    : '<p class="muted">No transcript entries.</p>';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root { color: #172033; background: #f6f8fb; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 40px; }
+    main { max-width: 920px; margin: 0 auto; background: white; border: 1px solid #dce3ee; border-radius: 12px; padding: 40px; box-shadow: 0 24px 80px rgba(22, 34, 51, 0.08); }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.15; }
+    h2 { margin-top: 36px; padding-top: 24px; border-top: 1px solid #e4e9f2; font-size: 18px; }
+    h3 { margin: 18px 0 6px; font-size: 14px; color: #31415f; }
+    p, li { line-height: 1.65; }
+    img { display: block; max-width: 100%; max-height: 720px; margin: 16px 0; border: 1px solid #dce3ee; border-radius: 8px; }
+    code { background: #eef3f8; padding: 2px 5px; border-radius: 4px; }
+    article { break-inside: avoid; }
+    .meta { margin: 0; color: #647086; font-size: 13px; }
+    .muted { color: #647086; }
+    @media print { body { padding: 0; background: white; } main { border: 0; box-shadow: none; border-radius: 0; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+    <p class="meta">Session ID: ${escapeHtml(session.id)} · Started: ${escapeHtml(session.started_at)} · Status: ${escapeHtml(session.status)}</p>
+    <section>
+      <h2>1. Test summary</h2>
+      ${summaryHtml}
+    </section>
+    <section>
+      <h2>2. Anomalies</h2>
+      ${anomaliesHtml}
+    </section>
+    <section>
+      <h2>3. Detail notes</h2>
+      ${detailsHtml}
+    </section>
+    <section>
+      <h2>Transcript</h2>
+      ${transcriptHtml}
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
 function imageFileToMarkdown(file: File, index: number): Promise<string> {
   if (file.size > MAX_PASTED_IMAGE_BYTES) {
     throw new Error('Pasted image is too large. Use an image under 5 MB.');
@@ -350,6 +523,7 @@ export default function SessionDetailPage() {
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const [summarySaveState, setSummarySaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [lastAutoUpdateNoteCursor, setLastAutoUpdateNoteCursor] = useState<string | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [applyingPreview, setApplyingPreview] = useState(false);
   const [autoUpdatingSummary, setAutoUpdatingSummary] = useState(false);
@@ -903,55 +1077,60 @@ export default function SessionDetailPage() {
     }
   };
 
-  const handleExportMarkdown = useCallback(async () => {
-    if (!id) return;
-    if (id === 'preview') {
-      const sn = structureNote ?? DEMO_STRUCTURE_NOTE;
-      const parts = [
-        `# ${title}`,
-        '',
-        '## 1. Test summary',
-        sn.test_summary.content_markdown || '(empty)',
-        '',
-        '## 2. Anomalies',
-        ...sn.anomalies.map((a) => `- **${a.title}** (${a.recorded_at}): ${a.description}`),
-        '',
-        '## 3. Detail notes',
-        ...sn.detail_notes.paragraphs.map((p) => {
-          const ts = detailNoteTimestamp(p);
-          const body = detailNoteBodyText(p);
-          return `### ${ts}\n\n${body}`;
-        }),
-        '',
-        '## Transcript',
-        ...transcriptBlocks.map(
-          (block) => `### ${formatTime(block.timestamp)} ${block.speaker}\n\n${block.content}`,
-        ),
-      ];
-      const text = parts.join('\n\n');
-      const blob = new Blob([text], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'structured-note-preview.md';
-      a.click();
-      URL.revokeObjectURL(url);
-      return;
-    }
+  const handleExport = useCallback(
+    async (format: ExportFormat) => {
+      if (!id || !session) return;
+      const sourceNote = id === 'preview' ? structureNote ?? DEMO_STRUCTURE_NOTE : structureNote;
+      if (!sourceNote) return;
+      const sn: StructureNoteDocument = {
+        ...sourceNote,
+        test_summary: {
+          ...sourceNote.test_summary,
+          content_markdown:
+            activeSummaryMarkdown || sourceNote.test_summary.content_markdown || '',
+        },
+      };
+      const baseName = sanitizeFileName(`${session.name || title}-structured-note`);
 
-    try {
-      const text = await exportNotes(id, 'markdown');
-      const blob = new Blob([text], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${session?.name || 'session'}-notes.md`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Export failed:', err);
-    }
-  }, [id, session?.name, structureNote, title, transcriptBlocks]);
+      try {
+        if (format === 'html') {
+          downloadTextFile(
+            await buildStructuredNoteHtml(title, session, sn, transcriptBlocks),
+            `${baseName}.html`,
+            'text/html;charset=utf-8',
+          );
+        } else if (format === 'json') {
+          downloadTextFile(
+            JSON.stringify(
+              {
+                exported_at: new Date().toISOString(),
+                title,
+                session,
+                structure_note: sn,
+                transcript: transcriptBlocks,
+                notes,
+              },
+              null,
+              2,
+            ),
+            `${baseName}.json`,
+            'application/json;charset=utf-8',
+          );
+        } else {
+          downloadTextFile(
+            buildStructuredNoteMarkdown(title, session, sn, transcriptBlocks),
+            `${baseName}.md`,
+            'text/markdown;charset=utf-8',
+          );
+        }
+      } catch (err) {
+        console.error('Export failed:', err);
+      } finally {
+        setExportMenuOpen(false);
+      }
+    },
+    [activeSummaryMarkdown, id, notes, session, structureNote, title, transcriptBlocks],
+  );
 
   if (loading) {
     return (
@@ -1046,13 +1225,57 @@ export default function SessionDetailPage() {
               <Mic className="h-4 w-4" />
               Active Session
             </button>
-            <button
-              onClick={handleExportMarkdown}
-              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
+            <div
+              className="relative"
+              onBlur={(event) => {
+                const nextFocus = event.relatedTarget;
+                if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
+                  setExportMenuOpen(false);
+                }
+              }}
             >
-              <Download className="h-4 w-4" />
-              Export
-            </button>
+              <button
+                type="button"
+                onClick={() => setExportMenuOpen((open) => !open)}
+                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
+                aria-expanded={exportMenuOpen}
+              >
+                <Download className="h-4 w-4" />
+                Export
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-full z-30 mt-2 w-52 overflow-hidden rounded-lg border border-space-border bg-space-panel py-1 shadow-xl shadow-black/30">
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleExport('html')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text-primary transition-colors hover:bg-space-card"
+                  >
+                    <FileCode2 className="h-4 w-4 text-accent-cyan" />
+                    HTML with images
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleExport('markdown')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
+                  >
+                    <FileText className="h-4 w-4 text-text-muted" />
+                    Markdown
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleExport('json')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
+                  >
+                    <FileJson className="h-4 w-4 text-text-muted" />
+                    JSON data
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
