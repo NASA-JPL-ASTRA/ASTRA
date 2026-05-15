@@ -427,9 +427,85 @@ def _offline_auto_update_summary(
     return "\n\n".join(parts).strip() or "No summary content is available yet."
 
 
-def auto_update_test_summary(session_id: str, manual_summary: str) -> StructureNoteDocument:
+def _offline_organized_auto_update_summary(
+    session: dict,
+    manual_summary: str,
+    notes: List[dict],
+    doc: StructureNoteDocument,
+) -> str:
+    generated = _offline_test_summary_markdown(
+        str(session.get("name") or doc.session_id),
+        utc_iso_timestamp(),
+        notes,
+        doc,
+        session_description=str(session.get("description") or "").strip(),
+        telemetry_mock_test1_path=session.get("telemetry_mock_test1_path"),
+    )
+    if not manual_summary.strip():
+        return generated
+    return "\n\n".join(
+        [
+            manual_summary.strip(),
+            "## Organized session summary",
+            generated,
+        ]
+    )
+
+
+def _strip_live_transcript_updates(markdown: str) -> str:
+    cleaned = re.sub(
+        r"(^|\n)#{2,6}\s+Live transcript updates\s*\n.*?(?=\n#{1,6}\s+\S|\Z)",
+        "\n",
+        markdown.strip(),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _format_live_transcript_lines(transcript_segments: List[dict]) -> List[str]:
+    lines: List[str] = []
+    for seg in transcript_segments:
+        timestamp = str(seg.get("timestamp") or "").strip()
+        speaker = str(seg.get("speaker") or "Unknown").strip() or "Unknown"
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        prefix = f"[{timestamp}] {speaker}: " if timestamp else f"{speaker}: "
+        lines.append(f"- {prefix}{text}")
+    return lines
+
+
+def _append_live_transcript_updates(manual_summary: str, transcript_segments: List[dict]) -> str:
+    base = manual_summary.strip()
+    lines = _format_live_transcript_lines(transcript_segments)
+    if not lines:
+        return base or "No summary content is available yet."
+
+    block = "\n".join(lines)
+    heading = "## Live transcript updates"
+    if not base:
+        return f"{heading}\n\n{block}"
+    if heading.lower() in base.lower():
+        return f"{base.rstrip()}\n{block}"
+    return f"{base.rstrip()}\n\n{heading}\n\n{block}"
+
+
+def _notes_after_cursor(notes: List[dict], since_note_id: str | None) -> List[dict]:
+    if not since_note_id:
+        return notes
+    for idx, note in enumerate(notes):
+        if str(note.get("id")) == since_note_id:
+            return notes[idx + 1 :]
+    return notes
+
+
+def auto_update_test_summary(
+    session_id: str,
+    manual_summary: str,
+    since_note_id: str | None = None,
+) -> tuple[StructureNoteDocument, str | None, int]:
     """
-    Operator-triggered merge: combine manual summary with current transcript context.
+    Operator-triggered merge: combine manual summary with new transcript context.
     Unlike session finalization, this is allowed to replace the summary because the
     operator explicitly requested it.
     """
@@ -438,27 +514,68 @@ def auto_update_test_summary(session_id: str, manual_summary: str) -> StructureN
         raise ValueError(f"Session {session_id} not found")
 
     doc = get_or_create_structure_note(session_id)
-    protected_manual, protected_images = _protect_markdown_data_images(manual_summary.strip())
+    is_ended = session.get("status") == "ended"
+    manual_for_update = (
+        _strip_live_transcript_updates(manual_summary)
+        if is_ended
+        else manual_summary.strip()
+    )
+    protected_manual, protected_images = _protect_markdown_data_images(manual_for_update)
 
     notes = sorted(get_notes_by_session(session_id), key=lambda n: str(n.get("timestamp", "")))
+    last_note_id = str(notes[-1].get("id")) if notes else since_note_id
+    notes_to_process = notes if is_ended else _notes_after_cursor(notes, since_note_id)
+    if not notes_to_process:
+        doc.test_summary = TestSummary(
+            status=TestSummaryStatus.ready,
+            generated_at=utc_iso_timestamp(),
+            content_markdown=manual_for_update or doc.test_summary.content_markdown,
+            error=None,
+        )
+        return _save(doc), last_note_id, 0
+
     transcript_segments: List[dict] = []
-    for n in notes:
+    for n in notes_to_process:
         c = (n.get("content") or "").strip()
         if c:
-            transcript_segments.append({"timestamp": str(n.get("timestamp")), "text": c})
+            transcript_segments.append(
+                {
+                    "timestamp": str(n.get("timestamp")),
+                    "speaker": str(n.get("speaker") or "Unknown"),
+                    "text": c,
+                }
+            )
+    if not transcript_segments:
+        doc.test_summary = TestSummary(
+            status=TestSummaryStatus.ready,
+            generated_at=utc_iso_timestamp(),
+            content_markdown=manual_for_update or doc.test_summary.content_markdown,
+            error=None,
+        )
+        return _save(doc), last_note_id, 0
+
+    if not is_ended:
+        content = _append_live_transcript_updates(protected_manual, transcript_segments)
+        doc.test_summary = TestSummary(
+            status=TestSummaryStatus.ready,
+            generated_at=utc_iso_timestamp(),
+            content_markdown=_restore_markdown_data_images(content, protected_images),
+            error=None,
+        )
+        return _save(doc), last_note_id, len(transcript_segments)
 
     messages = [
         {
             "role": "system",
             "content": (
-                "You update a live ASTRA Test summary by merging operator-written notes with "
-                "the latest transcript context. Return ONLY JSON with keys: content_markdown "
-                "(string), generated_at (string, ISO 8601 with timezone UTC). Preserve the "
-                "operator's intent and important wording. Integrate new transcript information "
-                "concisely; do not paste raw transcript. Keep Markdown image placeholders such "
+                "You write the organized final ASTRA Test summary for a completed recording session. "
+                "Return ONLY JSON with keys: content_markdown (string), generated_at (string, ISO 8601 with timezone UTC). "
+                "Use the full transcript, detail notes, anomaly cards, and operator-written manual notes. "
+                "Preserve operator-authored observations and intent, but organize the result into a concise "
+                "readable note summary. Do not paste raw transcript verbatim. Do not include a top-level heading "
+                "that repeats 'Test summary'. Keep Markdown image placeholders such "
                 "as [[PASTED_IMAGE_1]] exactly where they belong. Do not remove image placeholders. "
-                "Do not include a top-level heading that repeats 'Test summary'. Use English unless "
-                "the operator-written notes are primarily another language."
+                "Use English unless the operator-written notes are primarily another language."
             ),
         },
         {
@@ -469,7 +586,7 @@ def auto_update_test_summary(session_id: str, manual_summary: str) -> StructureN
                     "session_status": session.get("status"),
                     "session_description": (session.get("description") or "").strip(),
                     "manual_summary_markdown": protected_manual,
-                    "transcript_segments": transcript_segments,
+                    "full_transcript_segments": transcript_segments,
                     "detail_notes": [
                         {
                             "time_anchor": p.time_anchor,
@@ -501,18 +618,18 @@ def auto_update_test_summary(session_id: str, manual_summary: str) -> StructureN
                 content_markdown=content,
                 error=None,
             )
-            return _save(doc)
+            return _save(doc), last_note_id, len(transcript_segments)
         except Exception as e:
             logger.warning("Auto-update summary LLM validation failed: %s", e)
 
-    content = _offline_auto_update_summary(protected_manual, transcript_segments, doc)
+    content = _offline_organized_auto_update_summary(session, protected_manual, notes_to_process, doc)
     doc.test_summary = TestSummary(
         status=TestSummaryStatus.ready,
         generated_at=utc_iso_timestamp(),
         content_markdown=_restore_markdown_data_images(content, protected_images),
         error=None,
     )
-    return _save(doc)
+    return _save(doc), last_note_id, len(transcript_segments)
 
 
 def finalize_session_structure_note(session_id: str) -> None:

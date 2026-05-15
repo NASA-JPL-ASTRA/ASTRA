@@ -167,15 +167,26 @@ export function updateStructureNoteTestSummary(
   });
 }
 
+export interface StructureNoteAutoUpdateResponse {
+  document: StructureNoteDocument;
+  last_note_id: string | null;
+  processed_note_count: number;
+}
+
 export function autoUpdateStructureNoteTestSummary(
   sessionId: string,
   manualSummary: string,
-): Promise<StructureNoteDocument> {
-  return request<StructureNoteDocument>(
+  sinceNoteId?: string | null,
+): Promise<StructureNoteAutoUpdateResponse> {
+  return request<StructureNoteAutoUpdateResponse>(
     `/sessions/${sessionId}/structure-note/test-summary/auto-update`,
     {
       method: 'POST',
-      body: JSON.stringify({ manual_summary: manualSummary, mode: 'merge' }),
+      body: JSON.stringify({
+        manual_summary: manualSummary,
+        mode: 'merge',
+        since_note_id: sinceNoteId ?? null,
+      }),
     },
   );
 }

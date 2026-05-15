@@ -101,6 +101,15 @@ class TestSummaryAutoUpdateRequest(BaseModel):
 
     manual_summary: str = ""
     mode: str = "merge"
+    since_note_id: Optional[str] = None
+
+
+class TestSummaryAutoUpdateResponse(BaseModel):
+    """Auto-update result plus incremental transcript cursor metadata."""
+
+    document: StructureNoteDocument
+    last_note_id: Optional[str] = None
+    processed_note_count: int = 0
 
 
 class StructureNoteLLMOutput(BaseModel):

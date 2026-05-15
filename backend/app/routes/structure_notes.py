@@ -12,6 +12,7 @@ from app.database import get_session, structure_notes_db
 from app.schemas.structure_note import (
     StructureNoteDocument,
     TestSummaryAutoUpdateRequest,
+    TestSummaryAutoUpdateResponse,
     TestSummaryStatus,
     TestSummaryUpdateRequest,
     VoiceChunkRequest,
@@ -67,17 +68,28 @@ async def update_test_summary(sid: str, body: TestSummaryUpdateRequest):
     return doc
 
 
-@router.post("/{sid}/structure-note/test-summary/auto-update", response_model=StructureNoteDocument)
+@router.post(
+    "/{sid}/structure-note/test-summary/auto-update",
+    response_model=TestSummaryAutoUpdateResponse,
+)
 async def auto_update_test_summary_route(sid: str, body: TestSummaryAutoUpdateRequest):
     if not get_session(sid):
         raise HTTPException(status_code=404, detail=f"Session {sid} not found")
 
     try:
-        doc = auto_update_test_summary(sid, body.manual_summary)
+        doc, last_note_id, processed_note_count = auto_update_test_summary(
+            sid,
+            body.manual_summary,
+            since_note_id=body.since_note_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     payload = document_to_storage_dict(doc)
     structure_notes_db[sid] = payload
     await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, payload)
-    return doc
+    return TestSummaryAutoUpdateResponse(
+        document=doc,
+        last_note_id=last_note_id,
+        processed_note_count=processed_note_count,
+    )

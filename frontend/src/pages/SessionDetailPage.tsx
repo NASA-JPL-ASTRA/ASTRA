@@ -5,7 +5,10 @@ import {
   ArrowLeft,
   Check,
   Download,
+  Mic,
+  Pause,
   Pencil,
+  Play,
   Loader2,
   MessageSquareText,
   RotateCcw,
@@ -13,6 +16,7 @@ import {
   Search,
   Send,
   Sparkles,
+  Square,
   X,
 } from 'lucide-react';
 import {
@@ -31,6 +35,8 @@ import {
   SUMMARY_MODEL_OPTIONS,
   getSummaryModelLabel,
 } from '../config/summaryModels';
+import { useRecording } from '../contexts/RecordingContext';
+import { useStore } from '../store/useStore';
 import type { BackendNote, StructureNoteDetailParagraph, StructureNoteDocument } from '../types';
 
 const SPEAKER_COLORS = ['#00d4ff', '#00e676', '#b388ff', '#ffab00', '#ff5252'];
@@ -178,6 +184,17 @@ interface AiDebugMessage {
 
 const SUMMARY_MODEL_STORAGE_KEY = 'astra.summary.model';
 
+function autoUpdateCursorStorageKey(sessionId: string): string {
+  return `astra.summary.autoUpdateCursor.${sessionId}`;
+}
+
+function stripLiveTranscriptUpdates(markdown: string): string {
+  return markdown
+    .replace(/(^|\n)#{2,6}\s+Live transcript updates\s*\n[\s\S]*?(?=\n#{1,6}\s+\S|$)/gi, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
@@ -304,6 +321,14 @@ function groupTranscript(notes: BackendNote[]): TranscriptBlock[] {
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const {
+    pauseRecording,
+    resumeRecording,
+    stopRecording,
+    isRecording,
+    isPaused,
+  } = useRecording();
+  const { backendSessionId } = useStore();
   const workspaceRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const summaryTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -324,6 +349,7 @@ export default function SessionDetailPage() {
   const [summaryDraft, setSummaryDraft] = useState('');
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const [summarySaveState, setSummarySaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastAutoUpdateNoteCursor, setLastAutoUpdateNoteCursor] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [applyingPreview, setApplyingPreview] = useState(false);
   const [autoUpdatingSummary, setAutoUpdatingSummary] = useState(false);
@@ -365,14 +391,26 @@ export default function SessionDetailPage() {
         setIsSummaryEditing(loadedSession.status === 'active');
         setSummaryEditError(null);
         setSummarySaveState('idle');
+        const storedCursor =
+          typeof window === 'undefined' || isPreview
+            ? null
+            : window.localStorage.getItem(autoUpdateCursorStorageKey(sessionId));
+        setLastAutoUpdateNoteCursor(storedCursor);
         if (isPreview) {
           setStructureNote(DEMO_STRUCTURE_NOTE);
+          setSummaryDraft(DEMO_STRUCTURE_NOTE.test_summary.content_markdown || '');
         } else {
           try {
             const sn = await getStructureNote(sessionId);
-            if (!cancelled) setStructureNote(sn);
+            if (!cancelled) {
+              setStructureNote(sn);
+              setSummaryDraft(sn.test_summary.content_markdown || '');
+            }
           } catch {
-            if (!cancelled) setStructureNote(null);
+            if (!cancelled) {
+              setStructureNote(null);
+              setSummaryDraft('');
+            }
           }
         }
       } catch (err) {
@@ -402,8 +440,24 @@ export default function SessionDetailPage() {
       onMessage: (msg) => {
         if (msg.event === 'structure_note.updated') {
           getStructureNote(id)
-            .then(setStructureNote)
+            .then((sn) => {
+              setStructureNote(sn);
+              setSummaryDraft((draft) =>
+                draft.trim() ? draft : sn.test_summary.content_markdown || '',
+              );
+            })
             .catch(() => {});
+        } else if (msg.event === 'note.created') {
+          const note = msg.data as BackendNote;
+          setNotes((prev) =>
+            prev.some((item) => item.id === note.id) ? prev : [...prev, note],
+          );
+        } else if (msg.event === 'note.updated') {
+          const note = msg.data as BackendNote;
+          setNotes((prev) => prev.map((item) => (item.id === note.id ? note : item)));
+        } else if (msg.event === 'note.deleted') {
+          const deleted = msg.data as { id?: string };
+          setNotes((prev) => prev.filter((item) => item.id !== deleted.id));
         }
       },
     });
@@ -427,6 +481,7 @@ export default function SessionDetailPage() {
   }, [query, transcriptBlocks]);
   const currentSummaryMarkdown = structureNote?.test_summary.content_markdown || '';
   const activeSummaryMarkdown = isSummaryEditing ? summaryDraft : currentSummaryMarkdown;
+  const isActiveRecordingNote = Boolean(isRecording && backendSessionId && id === backendSessionId);
 
   const canEditSummary = Boolean(session) && !savingSummaryEdit;
 
@@ -501,19 +556,6 @@ export default function SessionDetailPage() {
     setSelectedSummaryModel(value);
     window.localStorage.setItem(SUMMARY_MODEL_STORAGE_KEY, value);
   };
-
-  const handleRefreshStructureNote = useCallback(async () => {
-    if (!id || id === 'preview') {
-      setStructureNote(DEMO_STRUCTURE_NOTE);
-      return;
-    }
-    try {
-      const sn = await getStructureNote(id);
-      setStructureNote(sn);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [id]);
 
   const startColumnResize = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -743,6 +785,8 @@ export default function SessionDetailPage() {
   const handleAutoUpdateSummary = async () => {
     if (!id || autoUpdatingSummary) return;
     const manualSummary = isSummaryEditing ? summaryDraft : currentSummaryMarkdown;
+    const isEndedSession = session?.status === 'ended';
+    let processedNoteCount = 0;
     setAutoUpdatingSummary(true);
     setSummaryEditError(null);
     setSummarySaveState('saving');
@@ -750,36 +794,78 @@ export default function SessionDetailPage() {
 
     try {
       if (id === 'preview') {
-        const recentTranscript = transcriptBlocks
-          .slice(-4)
+        const sortedNotes = [...notes].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        );
+        const cursorIndex =
+          !isEndedSession && lastAutoUpdateNoteCursor
+            ? sortedNotes.findIndex((note) => note.id === lastAutoUpdateNoteCursor)
+            : -1;
+        const notesToProcess = isEndedSession
+          ? sortedNotes
+          : cursorIndex >= 0
+            ? sortedNotes.slice(cursorIndex + 1)
+            : sortedNotes;
+        const newTranscriptBlocks = groupTranscript(notesToProcess);
+        const recentTranscript = newTranscriptBlocks
           .map((block) => `${block.speaker}: ${block.content}`)
           .join('\n');
-        const merged = [
-          manualSummary.trim() || 'Live summary draft.',
-          '',
-          '## Recent updates',
-          recentTranscript || 'No transcript updates available.',
-        ].join('\n');
+        const merged =
+          isEndedSession
+            ? [
+                stripLiveTranscriptUpdates(manualSummary),
+                '## Organized session summary',
+                'The session captured the recorded discussion and organized it into a final note summary.',
+                recentTranscript ? `\nKey transcript context:\n${recentTranscript}` : '',
+              ]
+                .filter(Boolean)
+                .join('\n\n')
+            : recentTranscript
+              ? [
+                  manualSummary.trim() || 'Live summary draft.',
+                  '',
+                  '## Live transcript updates',
+                  recentTranscript,
+                ].join('\n')
+              : manualSummary.trim() || currentSummaryMarkdown || 'No summary content is available yet.';
         await replaceTestSummary(merged);
         setSummaryDraft(merged);
+        const nextCursor = sortedNotes.at(-1)?.id ?? lastAutoUpdateNoteCursor;
+        setLastAutoUpdateNoteCursor(nextCursor);
+        processedNoteCount = notesToProcess.length;
       } else {
-        const updated = await autoUpdateStructureNoteTestSummary(id, manualSummary);
+        const result = await autoUpdateStructureNoteTestSummary(
+          id,
+          manualSummary,
+          lastAutoUpdateNoteCursor,
+        );
+        const updated = result.document;
         const merged = updated.test_summary.content_markdown;
         setStructureNote(updated);
         setSummaryDraft(merged);
+        const nextCursor = result.last_note_id ?? lastAutoUpdateNoteCursor;
+        setLastAutoUpdateNoteCursor(nextCursor);
+        if (nextCursor) {
+          window.localStorage.setItem(autoUpdateCursorStorageKey(id), nextCursor);
+        }
+        processedNoteCount = result.processed_note_count;
       }
       setPendingSummaryPreview(null);
-      setIsSummaryEditing(true);
+      setIsSummaryEditing(false);
       setSummarySaveState('saved');
       setAiMessages((prev) => [
         ...prev,
         {
           id: `assistant_${Date.now()}`,
           role: 'assistant',
-          content: 'Auto-updated the Test summary with the latest transcript and your manual notes.',
+          content:
+            isEndedSession
+              ? 'Generated the organized Test summary from the completed session.'
+              : processedNoteCount > 0
+              ? `Auto-updated the Test summary with ${processedNoteCount} new transcript item(s).`
+              : 'No new transcript since the last Auto update. The summary was left unchanged.',
         },
       ]);
-      requestAnimationFrame(() => summaryTextareaRef.current?.focus());
     } catch (err) {
       setSummarySaveState('error');
       setSummaryEditError(err instanceof Error ? err.message : 'Could not auto update the summary.');
@@ -921,12 +1007,44 @@ export default function SessionDetailPage() {
                 Structure note updated: {structureNote.updated_at}
               </span>
             )}
+            {isActiveRecordingNote && (
+              <div className="flex items-center gap-2 rounded-lg border border-space-border bg-space-card px-1.5 py-1">
+                {isPaused ? (
+                  <button
+                    type="button"
+                    onClick={resumeRecording}
+                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-green transition-colors hover:bg-accent-green/10"
+                  >
+                    <Play className="h-4 w-4" />
+                    Resume
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={pauseRecording}
+                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-amber transition-colors hover:bg-accent-amber/10"
+                  >
+                    <Pause className="h-4 w-4" />
+                    Pause
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={stopRecording}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-red transition-colors hover:bg-accent-red/10"
+                >
+                  <Square className="h-4 w-4" />
+                  Stop
+                </button>
+              </div>
+            )}
             <button
               type="button"
-              onClick={handleRefreshStructureNote}
-              className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
+              onClick={() => navigate('/session')}
+              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
             >
-              Reload note
+              <Mic className="h-4 w-4" />
+              Active Session
             </button>
             <button
               onClick={handleExportMarkdown}
@@ -1040,15 +1158,6 @@ export default function SessionDetailPage() {
                     </div>
                   </div>
                 </div>
-              ) : session.status !== 'ended' ? (
-                <div className="rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
-                  Recording still active. Use Live edit to write the summary as the session runs.
-                </div>
-              ) : structureNote?.test_summary.status === 'generating' ? (
-                <div className="flex items-center gap-2 rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Generating test summary…
-                </div>
               ) : structureNote?.test_summary.status === 'ready' ? (
                 <div
                   className={`rounded-lg border border-space-border/60 bg-space-card/30 px-4 py-3 ${STRUCTURE_MD_BODY_CLASS}`}
@@ -1059,14 +1168,22 @@ export default function SessionDetailPage() {
                     )}
                   </ReactMarkdown>
                 </div>
+              ) : session.status !== 'ended' ? (
+                <div className="rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
+                  Recording still active. Use Live edit to write the summary as the session runs.
+                </div>
+              ) : structureNote?.test_summary.status === 'generating' ? (
+                <div className="flex items-center gap-2 rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating test summary…
+                </div>
               ) : structureNote?.test_summary.status === 'error' ? (
                 <div className="rounded-lg border border-red-500/40 bg-red-950/20 px-4 py-3 text-sm text-red-200">
                   {structureNote.test_summary.error || 'Generation failed'}
                 </div>
               ) : (
                 <div className="rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
-                  Waiting for summary — if you just ended the session, wait a moment or click Reload
-                  note.
+                  Waiting for summary — if you just ended the session, it should appear shortly.
                 </div>
               )}
             </div>

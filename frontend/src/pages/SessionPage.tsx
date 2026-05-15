@@ -5,6 +5,7 @@ import {
   Square,
   Pause,
   Play,
+  FileText,
   AlertCircle,
   CheckCircle2,
   X,
@@ -36,6 +37,7 @@ export default function SessionPage() {
     sessionStartTime,
     selectedSttModel,
     setSelectedSttModel,
+    backendSessionId,
   } = useStore();
   const navigate = useNavigate();
 
@@ -184,6 +186,14 @@ export default function SessionPage() {
                 ))}
               </select>
             </div>
+            <button
+              type="button"
+              onClick={() => navigate(backendSessionId ? `/history/${backendSessionId}` : '/history')}
+              className="flex items-center gap-1.5 rounded-lg border border-space-border bg-space-card px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-cyan/40 hover:text-text-primary"
+            >
+              <FileText className="h-3.5 w-3.5 text-accent-cyan" />
+              Note
+            </button>
             {isRecording && (
               <div className="flex items-center gap-2">
                 {isPaused ? (
