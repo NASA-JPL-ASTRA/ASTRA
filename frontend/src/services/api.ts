@@ -324,8 +324,31 @@ export interface ChannelSearchHit {
   score: number;
 }
 
+export interface TelemetryAskResponse {
+  answer: string;
+  plan: Record<string, unknown>;
+  data: unknown;
+  error: string | null;
+}
+
 export function getTelemetryQueryInfo(): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>('/query', { method: 'GET' });
+}
+
+export function askTelemetryQuestion(payload: {
+  question: string;
+  session?: string;
+  t0?: number;
+  t1?: number;
+  at?: number;
+  severity?: string;
+  limit?: number;
+  model?: string;
+}): Promise<TelemetryAskResponse> {
+  return request<TelemetryAskResponse>('/query/ask', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function queryChannelValue(

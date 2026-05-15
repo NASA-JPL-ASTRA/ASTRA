@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  Activity,
   ArrowLeft,
   ChevronDown,
+  ChevronRight,
   Check,
   FileCode2,
   FileJson,
@@ -17,13 +19,13 @@ import {
   MessageSquareText,
   RotateCcw,
   Save,
-  Search,
   Send,
   Sparkles,
   Square,
   X,
 } from 'lucide-react';
 import {
+  askTelemetryQuestion,
   autoUpdateStructureNoteTestSummary,
   chatWithSummaryAssistant,
   getSession,
@@ -31,7 +33,7 @@ import {
   listNotes,
   updateStructureNoteTestSummary,
 } from '../services/api';
-import type { BackendSession } from '../services/api';
+import type { BackendSession, TelemetryAskResponse } from '../services/api';
 import { connectSessionWs } from '../services/sessionWs';
 import {
   DEFAULT_SUMMARY_MODEL,
@@ -42,7 +44,6 @@ import { useRecording } from '../contexts/RecordingContext';
 import { useStore } from '../store/useStore';
 import type { BackendNote, StructureNoteDetailParagraph, StructureNoteDocument } from '../types';
 
-const SPEAKER_COLORS = ['#00d4ff', '#00e676', '#b388ff', '#ffab00', '#ff5252'];
 const MAX_PASTED_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const DEMO_SESSION: BackendSession = {
@@ -187,6 +188,36 @@ interface AiDebugMessage {
 
 type ExportFormat = 'markdown' | 'html' | 'json';
 
+interface SpeechRecognitionResultLike {
+  readonly isFinal: boolean;
+  readonly length: number;
+  [index: number]: { transcript: string };
+}
+
+interface SpeechRecognitionEventLike extends Event {
+  readonly resultIndex: number;
+  readonly results: {
+    readonly length: number;
+    [index: number]: SpeechRecognitionResultLike;
+  };
+}
+
+type BrowserSpeechRecognition = EventTarget & {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: Event & { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionWindow = Window & {
+  SpeechRecognition?: new () => BrowserSpeechRecognition;
+  webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+};
+
 const SUMMARY_MODEL_STORAGE_KEY = 'astra.summary.model';
 
 function autoUpdateCursorStorageKey(sessionId: string): string {
@@ -225,6 +256,23 @@ function formatTime(dateStr: string): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function formatJson(data: unknown): string {
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
+}
+
+function defaultTelemetryWindow(session: BackendSession | null): { t0: number; t1: number } {
+  const anchor = session?.telemetry_mock_test1_path
+    ? session.started_at
+    : session?.ended_at || new Date().toISOString();
+  const end = Math.floor(new Date(anchor).getTime() / 1000);
+  const t1 = Number.isFinite(end) ? end : Math.floor(Date.now() / 1000);
+  return { t0: t1 - 400, t1 };
 }
 
 /** Backend may still emit a duplicate heading; the page already shows "Test summary". */
@@ -461,11 +509,6 @@ function imageFileToMarkdown(file: File, index: number): Promise<string> {
   });
 }
 
-function speakerColor(speaker: string, speakers: string[]): string {
-  const idx = Math.max(0, speakers.indexOf(speaker));
-  return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
-}
-
 function groupTranscript(notes: BackendNote[]): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
   const sorted = [...notes].sort(
@@ -505,13 +548,19 @@ export default function SessionDetailPage() {
   const workspaceRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const summaryTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const telemetryRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
 
   const [session, setSession] = useState<BackendSession | null>(null);
   const [notes, setNotes] = useState<BackendNote[]>([]);
   const [structureNote, setStructureNote] = useState<StructureNoteDocument | null>(null);
   const [title, setTitle] = useState('');
-  const [query, setQuery] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
+  const [telemetrySessionId, setTelemetrySessionId] = useState('');
+  const [telemetryQuestion, setTelemetryQuestion] = useState('');
+  const [telemetryResult, setTelemetryResult] = useState<TelemetryAskResponse | null>(null);
+  const [telemetryError, setTelemetryError] = useState<string | null>(null);
+  const [telemetryLoading, setTelemetryLoading] = useState(false);
+  const [telemetryVoiceListening, setTelemetryVoiceListening] = useState(false);
   const [selectedSummaryModel, setSelectedSummaryModel] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_SUMMARY_MODEL;
     return window.localStorage.getItem(SUMMARY_MODEL_STORAGE_KEY) || DEFAULT_SUMMARY_MODEL;
@@ -638,21 +687,21 @@ export default function SessionDetailPage() {
     return () => conn.close();
   }, [id]);
 
-  const speakers = useMemo(
-    () => [...new Set(notes.map((note) => note.speaker || 'Unknown'))],
-    [notes],
-  );
+  useEffect(() => {
+    if (session?.id && id !== 'preview') {
+      setTelemetrySessionId(session.id);
+    }
+  }, [id, session?.id]);
+
+  useEffect(() => {
+    return () => {
+      telemetryRecognitionRef.current?.stop();
+      telemetryRecognitionRef.current = null;
+    };
+  }, []);
 
   const transcriptBlocks = useMemo(() => groupTranscript(notes), [notes]);
-  const filteredTranscript = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return transcriptBlocks;
-    return transcriptBlocks.filter(
-      (block) =>
-        block.content.toLowerCase().includes(normalized) ||
-        block.speaker.toLowerCase().includes(normalized),
-    );
-  }, [query, transcriptBlocks]);
+  const telemetryWindow = useMemo(() => defaultTelemetryWindow(session), [session]);
   const currentSummaryMarkdown = structureNote?.test_summary.content_markdown || '';
   const activeSummaryMarkdown = isSummaryEditing ? summaryDraft : currentSummaryMarkdown;
   const isActiveRecordingNote = Boolean(isRecording && backendSessionId && id === backendSessionId);
@@ -730,6 +779,80 @@ export default function SessionDetailPage() {
     setSelectedSummaryModel(value);
     window.localStorage.setItem(SUMMARY_MODEL_STORAGE_KEY, value);
   };
+
+  const handleTelemetryAsk = useCallback(async () => {
+    const question = telemetryQuestion.trim();
+    if (!question || telemetryLoading) return;
+    setTelemetryLoading(true);
+    setTelemetryError(null);
+    try {
+      const result = await askTelemetryQuestion({
+        question,
+        session: telemetrySessionId.trim() || undefined,
+        t0: telemetryWindow.t0,
+        t1: telemetryWindow.t1,
+        at: telemetryWindow.t1,
+        severity: 'all',
+        limit: 20,
+      });
+      setTelemetryResult(result);
+      if (result.error) {
+        setTelemetryError(result.error);
+      }
+    } catch (err) {
+      setTelemetryError(err instanceof Error ? err.message : 'Telemetry query failed.');
+    } finally {
+      setTelemetryLoading(false);
+    }
+  }, [telemetryLoading, telemetryQuestion, telemetrySessionId, telemetryWindow.t0, telemetryWindow.t1]);
+
+  const handleTelemetryVoiceInput = useCallback(() => {
+    if (telemetryVoiceListening) {
+      telemetryRecognitionRef.current?.stop();
+      setTelemetryVoiceListening(false);
+      return;
+    }
+
+    const SpeechRecognitionCtor =
+      (window as SpeechRecognitionWindow).SpeechRecognition ??
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      setTelemetryError('Voice input is not supported in this browser.');
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = navigator.language || 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        transcript += event.results[i]?.[0]?.transcript ?? '';
+      }
+      if (transcript.trim()) {
+        setTelemetryQuestion(transcript.trim());
+      }
+    };
+    recognition.onerror = (event) => {
+      setTelemetryError(event.error ? `Voice input failed: ${event.error}` : 'Voice input failed.');
+    };
+    recognition.onend = () => {
+      setTelemetryVoiceListening(false);
+      telemetryRecognitionRef.current = null;
+    };
+
+    telemetryRecognitionRef.current = recognition;
+    setTelemetryVoiceListening(true);
+    setTelemetryError(null);
+    try {
+      recognition.start();
+    } catch (err) {
+      telemetryRecognitionRef.current = null;
+      setTelemetryVoiceListening(false);
+      setTelemetryError(err instanceof Error ? err.message : 'Voice input could not start.');
+    }
+  }, [telemetryVoiceListening]);
 
   const startColumnResize = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1478,23 +1601,69 @@ export default function SessionDetailPage() {
           style={{ scrollbarGutter: 'stable' }}
         >
           <div className="shrink-0 border-b border-space-border/60 px-5 py-4">
-            <div className="mb-4">
+            <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-sm font-medium text-text-primary">Transcript</h2>
+                <h2 className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
+                  <Activity className="h-4 w-4 text-accent-cyan" />
+                  Telemetry data query
+                </h2>
                 <p className="mt-1 text-xs text-text-muted">
-                  {notes.length} notes · {speakers.length} speakers
+                  {telemetrySessionId || 'No session tag'} · {telemetryWindow.t0} to {telemetryWindow.t1}
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 border-b border-space-border/70 pb-2">
-              <Search className="h-4 w-4 text-text-muted" />
+            <label className="mb-3 block">
+              <span className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-text-muted">
+                Influx session
+              </span>
               <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search transcript..."
-                className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
+                value={telemetrySessionId}
+                onChange={(event) => setTelemetrySessionId(event.target.value)}
+                className="w-full rounded-md border border-space-border/70 bg-space-black px-2.5 py-2 font-mono text-xs text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-cyan/50"
+                placeholder="session_id"
               />
+            </label>
+
+            <div className="rounded-lg border border-space-border/70 bg-space-black/40">
+              <textarea
+                value={telemetryQuestion}
+                onChange={(event) => setTelemetryQuestion(event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                    void handleTelemetryAsk();
+                  }
+                }}
+                placeholder="Ask telemetry..."
+                className="min-h-[76px] w-full resize-none rounded-t-lg border-0 bg-transparent px-3 py-2 text-sm leading-5 text-text-primary outline-none placeholder:text-text-muted"
+              />
+              <div className="flex items-center justify-between gap-2 border-t border-space-border/60 px-2.5 py-2">
+                <button
+                  type="button"
+                  onClick={handleTelemetryVoiceInput}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                    telemetryVoiceListening
+                      ? 'bg-accent-red/10 text-accent-red'
+                      : 'text-text-secondary hover:bg-space-card hover:text-text-primary'
+                  }`}
+                >
+                  <Mic className="h-3.5 w-3.5" />
+                  {telemetryVoiceListening ? 'Listening' : 'Voice'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleTelemetryAsk()}
+                  disabled={telemetryLoading || !telemetryQuestion.trim()}
+                  className="flex items-center gap-1.5 rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-medium text-space-black transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  {telemetryLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  )}
+                  Query
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1506,36 +1675,48 @@ export default function SessionDetailPage() {
               scrollbarGutter: 'stable',
             }}
           >
-            {filteredTranscript.length === 0 ? (
+            {telemetryLoading ? (
               <div className="flex h-full flex-col items-center justify-center text-center text-text-muted">
-                <MessageSquareText className="mb-3 h-10 w-10 opacity-20" />
-                <p className="text-sm">No transcript matches your search</p>
+                <Loader2 className="mb-3 h-8 w-8 animate-spin text-accent-cyan" />
+                <p className="text-sm">Querying telemetry...</p>
+              </div>
+            ) : telemetryResult ? (
+              <div className="space-y-4">
+                <section>
+                  <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Answer
+                  </h3>
+                  <p className="text-sm leading-6 text-text-primary">{telemetryResult.answer}</p>
+                  {(telemetryError || telemetryResult.error) && (
+                    <p className="mt-2 rounded-md border border-red-500/30 bg-red-950/20 px-3 py-2 text-xs text-red-200">
+                      {telemetryError || telemetryResult.error}
+                    </p>
+                  )}
+                </section>
+                <section>
+                  <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Plan
+                  </h3>
+                  <pre className="max-h-32 overflow-auto rounded-md border border-space-border/60 bg-space-black/50 p-2 text-[11px] leading-5 text-text-secondary">
+                    {formatJson(telemetryResult.plan)}
+                  </pre>
+                </section>
+                <section>
+                  <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Result
+                  </h3>
+                  <pre className="max-h-56 overflow-auto rounded-md border border-space-border/60 bg-space-black/50 p-2 text-[11px] leading-5 text-text-secondary">
+                    {formatJson(telemetryResult.data)}
+                  </pre>
+                </section>
               </div>
             ) : (
-              <div className="space-y-6">
-                {filteredTranscript.map((block) => {
-                  const color = speakerColor(block.speaker, speakers);
-                  return (
-                    <article key={block.id} className="group">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span
-                          className="text-xs font-medium"
-                          style={{
-                            color,
-                          }}
-                        >
-                          {block.speaker}
-                        </span>
-                        <span className="text-[11px] text-text-muted">
-                          {formatTime(block.timestamp)}
-                        </span>
-                      </div>
-                      <p className="text-sm leading-6 text-text-secondary transition-colors group-hover:text-text-primary">
-                        {block.content}
-                      </p>
-                    </article>
-                  );
-                })}
+              <div className="flex h-full flex-col items-center justify-center text-center text-text-muted">
+                <Activity className="mb-3 h-10 w-10 opacity-20" />
+                <p className="text-sm">Telemetry results will appear here</p>
+                {telemetryError && (
+                  <p className="mt-2 max-w-xs text-xs text-red-200">{telemetryError}</p>
+                )}
               </div>
             )}
           </div>
@@ -1543,7 +1724,7 @@ export default function SessionDetailPage() {
           <div
             onMouseDown={startSidebarResize}
             className="h-1.5 cursor-row-resize border-y border-space-border/60 bg-space-black transition-colors hover:bg-accent-cyan/20"
-            title="Drag to resize"
+            title="Resize telemetry query"
           />
 
           <div

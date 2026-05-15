@@ -2,6 +2,7 @@ from app.schemas.schemas import (
     SessionStatus, NoteType,
     SessionCreate, SessionUpdate, SessionResponse,
     SummaryChatMessage, SummaryChatRequest, SummaryChatResponse,
+    TelemetryAskRequest, TelemetryAskResponse,
     NoteCreate, NoteUpdate, NoteResponse,
     TelemetryCreate, TelemetryBatchCreate, TelemetryResponse,
     WebSocketMessage,

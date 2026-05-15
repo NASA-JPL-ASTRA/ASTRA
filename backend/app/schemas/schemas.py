@@ -68,6 +68,26 @@ class SummaryChatResponse(BaseModel):
     updated_summary: Optional[str] = None
 
 
+# ============ Telemetry Assistant Schemas ============
+
+class TelemetryAskRequest(BaseModel):
+    question: str
+    session: Optional[str] = None
+    t0: Optional[float] = None
+    t1: Optional[float] = None
+    at: Optional[float] = None
+    severity: str = "all"
+    limit: int = Field(default=20, ge=1, le=500)
+    model: Optional[str] = None
+
+
+class TelemetryAskResponse(BaseModel):
+    answer: str
+    plan: Dict[str, Any] = Field(default_factory=dict)
+    data: Any = None
+    error: Optional[str] = None
+
+
 # ============ Note Schemas ============
 
 class NoteCreate(BaseModel):

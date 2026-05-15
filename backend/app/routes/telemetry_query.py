@@ -13,7 +13,13 @@ from typing import Any, List
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.schemas import TelemetryAskRequest, TelemetryAskResponse
 from app.services.channel_search import search_channel
+from app.services.telemetry_ai import (
+    execute_telemetry_plan,
+    plan_telemetry_query,
+    summarize_telemetry_result,
+)
 from app.services.influx_query import (
     get_channel_value,
     get_recent_events,
@@ -42,6 +48,7 @@ def query_api_info() -> dict[str, Any]:
             "/api/query/range",
             "/api/query/events",
             "/api/query/search",
+            "/api/query/ask",
         ],
         "legacy_flask_paths": ["/channel", "/range", "/events", "/search"],
         "note": "Use /api/query/* via the ASTRA backend (replaces standalone Flask on :5001).",
@@ -147,3 +154,34 @@ def search(
         return search_channel(stripped, top_k=k)
     except Exception as e:
         raise _upstream_error(e) from e
+
+
+@router.post("/query/ask", response_model=TelemetryAskResponse)
+async def ask_telemetry(body: TelemetryAskRequest) -> TelemetryAskResponse:
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Missing question")
+
+    plan = await plan_telemetry_query(
+        question=question,
+        session=body.session,
+        t0=body.t0,
+        t1=body.t1,
+        at=body.at,
+        severity=body.severity,
+        limit=body.limit,
+        model=body.model,
+    )
+
+    try:
+        data, error = execute_telemetry_plan(plan)
+    except Exception as e:
+        logger.exception("Telemetry AI execution failed")
+        data, error = None, f"Telemetry backend unavailable: {e}"
+
+    return TelemetryAskResponse(
+        answer=summarize_telemetry_result(plan, data, error),
+        plan=plan,
+        data=data,
+        error=error,
+    )
