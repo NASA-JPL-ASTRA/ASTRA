@@ -12,7 +12,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import TranscriptionPanel from '../components/session/TranscriptionPanel';
-import { useWhisper } from '../hooks/useWhisper';
+import { useRecording } from '../contexts/RecordingContext';
 import { useStore } from '../store/useStore';
 import {
   STT_MODEL_OPTIONS,
@@ -27,7 +27,7 @@ export default function SessionPage() {
     stopRecording,
     isRecording,
     isPaused,
-  } = useWhisper();
+  } = useRecording();
   const {
     recordingError,
     transcriptions,

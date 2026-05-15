@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import { useStore } from '../../store/useStore';
+import { RecordingProvider } from '../../contexts/RecordingContext';
 
 export default function MainLayout() {
   const { sidebarCollapsed, sidebarWidth } = useStore();
@@ -14,10 +15,12 @@ export default function MainLayout() {
         className="flex-1 flex flex-col"
         style={{ marginLeft: effectiveSidebarWidth }}
       >
-        <Header />
-        <main className="flex-1 overflow-auto">
-          <Outlet />
-        </main>
+        <RecordingProvider>
+          <Header />
+          <main className="flex-1 overflow-auto">
+            <Outlet />
+          </main>
+        </RecordingProvider>
       </div>
     </div>
   );

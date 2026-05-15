@@ -7,9 +7,9 @@ import type { BackendNote } from '../types';
 const TARGET_SAMPLE_RATE = 16000;
 
 /** End an utterance and send STT after this much trailing silence (pause-based chunking). */
-const PAUSE_TO_FLUSH_SEC = 1.0;
+const PAUSE_TO_FLUSH_SEC = 0.45;
 /** Safety cap so one uninterrupted monologue still ships in bounded chunks. */
-const MAX_UTTERANCE_SEC = 90;
+const MAX_UTTERANCE_SEC = 8;
 
 /** When both stay below these, skip STT upload (reduces silence / room-noise hallucinations). */
 const SILENCE_RMS_MAX = 0.006;

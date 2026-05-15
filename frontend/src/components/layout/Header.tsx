@@ -1,8 +1,10 @@
 import { Bell, Search, Mic, MicOff, Circle } from 'lucide-react';
 import { useStore } from '../../store/useStore';
+import { useRecording } from '../../contexts/RecordingContext';
 
 export default function Header() {
-  const { isRecording, isMuted, toggleRecording, toggleMute, sessions, currentSessionId } = useStore();
+  const { isRecording, isMuted, toggleMute, sessions, currentSessionId } = useStore();
+  const { startRecording, stopRecording } = useRecording();
   const currentSession = sessions.find((s) => s.id === currentSessionId);
 
   return (
@@ -42,7 +44,13 @@ export default function Header() {
       <div className="flex items-center gap-3">
         {/* Recording Indicator */}
         <button
-          onClick={toggleRecording}
+          onClick={() => {
+            if (isRecording) {
+              void stopRecording();
+            } else {
+              void startRecording();
+            }
+          }}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
             isRecording
               ? 'bg-accent-red/15 text-accent-red border border-accent-red/30'
@@ -54,7 +62,7 @@ export default function Header() {
               isRecording ? 'bg-accent-red animate-pulse-glow' : 'bg-text-muted'
             }`}
           />
-          {isRecording ? 'Recording' : 'Paused'}
+          {isRecording ? 'Recording' : 'Start'}
         </button>
 
         {/* Mute Toggle */}
