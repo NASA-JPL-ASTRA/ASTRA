@@ -12,26 +12,48 @@ import {
   Pencil,
   Check,
   X,
+  Plus,
+  Trash2,
+  UserRound,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
-import type { LiveTranscription } from '../../store/useStore';
+import type { LiveTranscription, SpeakerProfile } from '../../store/useStore';
 import { getSttModelLabel } from '../../config/sttModels';
 
-/* ─── Speaker color mapping ─── */
-const SPEAKER_COLORS = [
-  { color: '#00d4ff', name: 'Speaker A', initials: 'SA' },
-  { color: '#00e676', name: 'Speaker B', initials: 'SB' },
-  { color: '#b388ff', name: 'Speaker C', initials: 'SC' },
-  { color: '#ffab00', name: 'Speaker D', initials: 'SD' },
-  { color: '#ff5252', name: 'Speaker E', initials: 'SE' },
+const COLOR_SWATCHES = [
+  '#00d4ff',
+  '#00e676',
+  '#b388ff',
+  '#ffab00',
+  '#ff5252',
+  '#4dd0e1',
+  '#64ffda',
+  '#f06292',
 ];
 
-function getSpeaker(speakerId: string, speakerMap: Map<string, number>) {
-  if (!speakerMap.has(speakerId)) {
-    speakerMap.set(speakerId, speakerMap.size);
+const FALLBACK_SPEAKER: SpeakerProfile = {
+  id: 'unknown',
+  name: 'Unknown',
+  color: '#8899aa',
+};
+
+function getSpeakerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'SP';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
+
+function getSpeakerById(speakers: SpeakerProfile[], speakerId: string): SpeakerProfile {
+  return speakers.find((speaker) => speaker.id === speakerId) ?? FALLBACK_SPEAKER;
+}
+
+function getSpeakerUsage(transcriptions: LiveTranscription[]): Map<string, number> {
+  const usage = new Map<string, number>();
+  for (const entry of transcriptions) {
+    usage.set(entry.speakerId, (usage.get(entry.speakerId) ?? 0) + 1);
   }
-  const idx = speakerMap.get(speakerId)!;
-  return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+  return usage;
 }
 
 function formatRecordingDuration(seconds: number): string {
@@ -130,6 +152,7 @@ function useTypewriter(target: string, isFinal: boolean): string {
 function TranscriptionEntryRow({
   entry,
   speaker,
+  speakers,
   elapsedStr,
   isEditing,
   editText,
@@ -137,9 +160,11 @@ function TranscriptionEntryRow({
   onEditChange,
   onSave,
   onCancel,
+  onSpeakerChange,
 }: {
   entry: LiveTranscription;
-  speaker: { color: string; name: string; initials: string };
+  speaker: SpeakerProfile;
+  speakers: SpeakerProfile[];
   elapsedStr: string;
   isEditing: boolean;
   editText: string;
@@ -147,10 +172,12 @@ function TranscriptionEntryRow({
   onEditChange: (text: string) => void;
   onSave: () => void;
   onCancel: () => void;
+  onSpeakerChange: (speakerId: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const displayText = useTypewriter(entry.rawText, entry.isFinal);
   const isTyping = displayText !== entry.rawText || !entry.isFinal;
+  const speakerInitials = getSpeakerInitials(speaker.name);
 
   useEffect(() => {
     if (isEditing && textareaRef.current) {
@@ -169,14 +196,24 @@ function TranscriptionEntryRow({
             border: `1.5px solid ${speaker.color}30`,
           }}
         >
-          {speaker.initials}
+          {speakerInitials}
         </div>
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 mb-1.5">
-            <span className="text-xs font-semibold" style={{ color: speaker.color }}>
-              {speaker.name}
-            </span>
+            <select
+              value={entry.speakerId}
+              onChange={(e) => onSpeakerChange(e.target.value)}
+              className="min-w-0 max-w-40 rounded-md border border-transparent bg-transparent py-0.5 pr-5 text-xs font-semibold outline-none transition-colors hover:border-space-border focus:border-accent-cyan/50"
+              style={{ color: speaker.color }}
+              aria-label="Speaker"
+            >
+              {speakers.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
             <span className="text-[11px] text-accent-cyan/70 font-mono bg-accent-cyan/5 px-1.5 py-0.5 rounded">
               {elapsedStr}
             </span>
@@ -276,10 +313,149 @@ function useLocalClock() {
   return now;
 }
 
+function SpeakerRail({
+  speakers,
+  activeSpeakerId,
+  transcriptions,
+  onAddSpeaker,
+  onActiveSpeakerChange,
+  onSpeakerNameChange,
+  onSpeakerColorChange,
+  onRemoveSpeaker,
+}: {
+  speakers: SpeakerProfile[];
+  activeSpeakerId: string;
+  transcriptions: LiveTranscription[];
+  onAddSpeaker: () => void;
+  onActiveSpeakerChange: (speakerId: string) => void;
+  onSpeakerNameChange: (speakerId: string, name: string) => void;
+  onSpeakerColorChange: (speakerId: string, color: string) => void;
+  onRemoveSpeaker: (speakerId: string) => void;
+}) {
+  const usage = useMemo(() => getSpeakerUsage(transcriptions), [transcriptions]);
+
+  return (
+    <aside className="flex w-full shrink-0 flex-col border-t border-space-border bg-space-dark/30 lg:w-80 lg:border-l lg:border-t-0">
+      <div className="flex items-center justify-between border-b border-space-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-accent-cyan" />
+          <h3 className="text-sm font-semibold text-text-primary">Speakers</h3>
+          <span className="rounded-md bg-space-card px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+            {speakers.length}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onAddSpeaker}
+          className="rounded-lg border border-accent-cyan/25 bg-accent-cyan/10 p-1.5 text-accent-cyan transition-colors hover:bg-accent-cyan/20"
+          aria-label="Add speaker"
+          title="Add speaker"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        {speakers.map((speaker, index) => {
+          const isActive = speaker.id === activeSpeakerId;
+          const entryCount = usage.get(speaker.id) ?? 0;
+          return (
+            <div
+              key={speaker.id}
+              className={`rounded-lg border p-3 transition-colors ${
+                isActive
+                  ? 'border-accent-cyan/35 bg-accent-cyan/5'
+                  : 'border-space-border bg-space-panel/60'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold"
+                  style={{
+                    backgroundColor: `${speaker.color}18`,
+                    border: `1.5px solid ${speaker.color}35`,
+                    color: speaker.color,
+                  }}
+                >
+                  {getSpeakerInitials(speaker.name)}
+                </div>
+                <input
+                  value={speaker.name}
+                  onChange={(e) => onSpeakerNameChange(speaker.id, e.target.value)}
+                  onBlur={(e) =>
+                    onSpeakerNameChange(
+                      speaker.id,
+                      e.target.value.trim() || `Speaker ${index + 1}`,
+                    )
+                  }
+                  className="min-w-0 flex-1 rounded-md border border-space-border bg-space-card px-2 py-1.5 text-sm font-medium text-text-primary outline-none transition-colors focus:border-accent-cyan/50"
+                  aria-label="Speaker name"
+                />
+                <button
+                  type="button"
+                  onClick={() => onActiveSpeakerChange(speaker.id)}
+                  className={`rounded-md p-1.5 transition-colors ${
+                    isActive
+                      ? 'bg-accent-green/15 text-accent-green'
+                      : 'text-text-muted hover:bg-space-hover hover:text-text-primary'
+                  }`}
+                  aria-label="Use speaker"
+                  title="Use speaker"
+                >
+                  {isActive ? (
+                    <Check className="h-3.5 w-3.5" />
+                  ) : (
+                    <UserRound className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveSpeaker(speaker.id)}
+                  disabled={speakers.length <= 1}
+                  className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-30"
+                  aria-label="Remove speaker"
+                  title="Remove speaker"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5">
+                  {COLOR_SWATCHES.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => onSpeakerColorChange(speaker.id, color)}
+                      className={`h-4 w-4 rounded-full border transition-transform hover:scale-110 ${
+                        speaker.color === color
+                          ? 'border-text-primary'
+                          : 'border-space-border'
+                      }`}
+                      style={{ backgroundColor: color }}
+                      aria-label="Set speaker color"
+                      title="Set speaker color"
+                    />
+                  ))}
+                </div>
+                <span className="shrink-0 font-mono text-[10px] text-text-muted">
+                  {entryCount} entries
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
 /* ─── Main panel ─── */
 export default function TranscriptionPanel() {
   const {
     transcriptions,
+    speakers,
+    activeSpeakerId,
     isRecording,
     isPaused,
     wsConnected,
@@ -287,11 +463,15 @@ export default function TranscriptionPanel() {
     sessionStartTime,
     selectedSttModel,
     updateLiveTranscription,
+    setActiveSpeaker,
+    addSpeaker,
+    updateSpeaker,
+    removeSpeaker,
+    setTranscriptionSpeaker,
   } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
 
-  const speakerMap = useMemo(() => new Map<string, number>(), []);
   const now = useLocalClock();
 
   // Editing state
@@ -333,7 +513,7 @@ export default function TranscriptionPanel() {
       ? Math.max(0, Math.floor((now.getTime() - sessionStartTime.getTime()) / 1000))
       : 0;
 
-  const uniqueSpeakers = new Set(transcriptions.map((t) => t.speakerId)).size;
+  const uniqueSpeakers = new Set(transcriptions.map((t) => t.speakerId)).size || speakers.length;
   const isActivelyListening = isRecording && !isPaused;
 
   return (
@@ -416,65 +596,86 @@ export default function TranscriptionPanel() {
         </div>
       </div>
 
-      {/* ─── Transcription Feed ─── */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto py-2"
-      >
-        {transcriptions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-text-muted">
-            <AudioLines className="w-16 h-16 mb-4 opacity-20" />
-            <p className="text-base font-medium mb-1">No transcriptions yet</p>
-            <p className="text-sm text-text-muted">
-              {isRecording
-                ? isPaused
-                  ? 'Recording is paused — click Resume to continue'
-                  : 'Listening... speak into your microphone'
-                : 'Click "Start Recording" to begin a new session'}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {transcriptions.map((entry) => {
-              const speaker = getSpeaker(entry.speakerId, speakerMap);
-              const offsetSec = sessionStartTime
-                ? Math.max(0, Math.floor((entry.timestamp.getTime() - sessionStartTime.getTime()) / 1000))
-                : 0;
-              const elapsedStr = formatRecordingDuration(offsetSec);
-              return (
-                <TranscriptionEntryRow
-                  key={entry.id}
-                  entry={entry}
-                  speaker={speaker}
-                  elapsedStr={elapsedStr}
-                  isEditing={editingId === entry.id}
-                  editText={editText}
-                  onStartEdit={() => handleStartEdit(entry.id, entry.rawText)}
-                  onEditChange={setEditText}
-                  onSave={handleSave}
-                  onCancel={handleCancel}
-                />
-              );
-            })}
-          </div>
-        )}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {/* ─── Transcription Feed ─── */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="min-h-0 flex-1 overflow-y-auto py-2"
+        >
+          {transcriptions.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center text-text-muted">
+              <AudioLines className="mb-4 h-16 w-16 opacity-20" />
+              <p className="mb-1 text-base font-medium">No transcriptions yet</p>
+              <p className="text-sm text-text-muted">
+                {isRecording
+                  ? isPaused
+                    ? 'Recording is paused'
+                    : 'Listening...'
+                  : 'Ready to record'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {transcriptions.map((entry) => {
+                const speaker = getSpeakerById(speakers, entry.speakerId);
+                const offsetSec = sessionStartTime
+                  ? Math.max(0, Math.floor((entry.timestamp.getTime() - sessionStartTime.getTime()) / 1000))
+                  : 0;
+                const elapsedStr = formatRecordingDuration(offsetSec);
+                return (
+                  <TranscriptionEntryRow
+                    key={entry.id}
+                    entry={entry}
+                    speaker={speaker}
+                    speakers={speakers}
+                    elapsedStr={elapsedStr}
+                    isEditing={editingId === entry.id}
+                    editText={editText}
+                    onStartEdit={() => handleStartEdit(entry.id, entry.rawText)}
+                    onEditChange={setEditText}
+                    onSave={handleSave}
+                    onCancel={handleCancel}
+                    onSpeakerChange={(speakerId) =>
+                      setTranscriptionSpeaker(entry.id, speakerId)
+                    }
+                  />
+                );
+              })}
+            </div>
+          )}
 
-        {/* Scroll-to-bottom button */}
-        {transcriptions.length > 5 && (
-          <button
-            onClick={() => {
-              if (scrollRef.current) {
-                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-                isAtBottomRef.current = true;
-              }
-            }}
-            className="sticky bottom-2 mx-auto flex items-center gap-1 px-3 py-1 bg-space-card border border-space-border rounded-full text-xs text-text-muted hover:text-text-primary hover:border-accent-cyan/30 transition-all shadow-lg"
-          >
-            <ChevronDown className="w-3 h-3" />
-            Latest
-          </button>
-        )}
+          {/* Scroll-to-bottom button */}
+          {transcriptions.length > 5 && (
+            <button
+              onClick={() => {
+                if (scrollRef.current) {
+                  scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                  isAtBottomRef.current = true;
+                }
+              }}
+              className="sticky bottom-2 mx-auto flex items-center gap-1 rounded-full border border-space-border bg-space-card px-3 py-1 text-xs text-text-muted shadow-lg transition-all hover:border-accent-cyan/30 hover:text-text-primary"
+            >
+              <ChevronDown className="h-3 w-3" />
+              Latest
+            </button>
+          )}
+        </div>
+
+        <SpeakerRail
+          speakers={speakers}
+          activeSpeakerId={activeSpeakerId}
+          transcriptions={transcriptions}
+          onAddSpeaker={addSpeaker}
+          onActiveSpeakerChange={setActiveSpeaker}
+          onSpeakerNameChange={(speakerId, name) =>
+            updateSpeaker(speakerId, { name })
+          }
+          onSpeakerColorChange={(speakerId, color) =>
+            updateSpeaker(speakerId, { color })
+          }
+          onRemoveSpeaker={removeSpeaker}
+        />
       </div>
 
       {/* ─── Bottom indicator ─── */}

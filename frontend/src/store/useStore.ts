@@ -16,6 +16,12 @@ export interface LiveTranscription {
   isFinal: boolean;
 }
 
+export interface SpeakerProfile {
+  id: string;
+  name: string;
+  color: string;
+}
+
 interface AppState {
   // Session
   currentSessionId: string | null;
@@ -38,6 +44,8 @@ interface AppState {
 
   // Live transcriptions from Whisper
   transcriptions: LiveTranscription[];
+  speakers: SpeakerProfile[];
+  activeSpeakerId: string;
 
   // Live notes from backend (during active session)
   liveNotes: BackendNote[];
@@ -61,7 +69,20 @@ interface AppState {
   setWsConnected: (connected: boolean) => void;
   addTranscription: (entry: LiveTranscription) => void;
   updateLiveTranscription: (id: string, newText: string) => void;
-  upsertStreamingTranscription: (id: string, transcript: string, isFinal: boolean) => void;
+  upsertStreamingTranscription: (
+    id: string,
+    transcript: string,
+    isFinal: boolean,
+    speakerId?: string,
+  ) => void;
+  setActiveSpeaker: (speakerId: string) => void;
+  addSpeaker: () => void;
+  updateSpeaker: (
+    speakerId: string,
+    updates: Partial<Pick<SpeakerProfile, 'name' | 'color'>>,
+  ) => void;
+  removeSpeaker: (speakerId: string) => void;
+  setTranscriptionSpeaker: (transcriptionId: string, speakerId: string) => void;
   clearTranscriptions: () => void;
   addLiveNote: (note: BackendNote) => void;
   updateLiveNote: (noteId: string, note: BackendNote) => void;
@@ -80,6 +101,25 @@ interface AppState {
 }
 
 const STT_MODEL_STORAGE_KEY = 'astra.sttModel';
+const SPEAKER_PALETTE = [
+  '#00d4ff',
+  '#00e676',
+  '#b388ff',
+  '#ffab00',
+  '#ff5252',
+  '#4dd0e1',
+  '#64ffda',
+  '#f06292',
+];
+const DEFAULT_SPEAKER_ID = 'speaker_0';
+
+const defaultSpeakers: SpeakerProfile[] = [
+  {
+    id: DEFAULT_SPEAKER_ID,
+    name: 'Speaker 1',
+    color: SPEAKER_PALETTE[0],
+  },
+];
 
 function loadInitialSttModel(): string {
   if (typeof window === 'undefined') return DEFAULT_STT_MODEL;
@@ -105,6 +145,8 @@ export const useStore = create<AppState>((set, get) => ({
   wsConnected: false,
 
   transcriptions: [],
+  speakers: defaultSpeakers,
+  activeSpeakerId: DEFAULT_SPEAKER_ID,
   liveNotes: [],
 
   sidebarCollapsed: false,
@@ -136,13 +178,21 @@ export const useStore = create<AppState>((set, get) => ({
         t.id === id ? { ...t, rawText: newText } : t
       ),
     })),
-  upsertStreamingTranscription: (id, transcript, isFinal) =>
+  upsertStreamingTranscription: (id, transcript, isFinal, speakerId) =>
     set((s) => {
       const exists = s.transcriptions.some((t) => t.id === id);
+      const resolvedSpeakerId = speakerId ?? s.activeSpeakerId;
       if (exists) {
         return {
           transcriptions: s.transcriptions.map((t) =>
-            t.id === id ? { ...t, rawText: transcript, isFinal } : t
+            t.id === id
+              ? {
+                  ...t,
+                  rawText: transcript,
+                  isFinal,
+                  speakerId: speakerId ?? t.speakerId,
+                }
+              : t
           ),
         };
       }
@@ -152,12 +202,69 @@ export const useStore = create<AppState>((set, get) => ({
           {
             id,
             timestamp: new Date(),
-            speakerId: 'speaker_0',
+            speakerId: resolvedSpeakerId,
             rawText: transcript,
             confidence: 0.9,
             isFinal,
           },
         ],
+      };
+    }),
+  setActiveSpeaker: (speakerId) =>
+    set((s) =>
+      s.speakers.some((speaker) => speaker.id === speakerId)
+        ? { activeSpeakerId: speakerId }
+        : {}
+    ),
+  addSpeaker: () =>
+    set((s) => {
+      const nextIndex = s.speakers.length + 1;
+      const id = `speaker_${Date.now().toString(36)}_${nextIndex}`;
+      const speaker = {
+        id,
+        name: `Speaker ${nextIndex}`,
+        color: SPEAKER_PALETTE[s.speakers.length % SPEAKER_PALETTE.length],
+      };
+      return {
+        speakers: [...s.speakers, speaker],
+        activeSpeakerId: id,
+      };
+    }),
+  updateSpeaker: (speakerId, updates) =>
+    set((s) => ({
+      speakers: s.speakers.map((speaker) =>
+        speaker.id === speakerId
+          ? {
+              ...speaker,
+              ...updates,
+            }
+          : speaker
+      ),
+    })),
+  removeSpeaker: (speakerId) =>
+    set((s) => {
+      if (s.speakers.length <= 1) return {};
+      const remaining = s.speakers.filter((speaker) => speaker.id !== speakerId);
+      if (remaining.length === s.speakers.length) return {};
+      const fallbackId = remaining[0].id;
+      return {
+        speakers: remaining,
+        activeSpeakerId:
+          s.activeSpeakerId === speakerId ? fallbackId : s.activeSpeakerId,
+        transcriptions: s.transcriptions.map((entry) =>
+          entry.speakerId === speakerId
+            ? { ...entry, speakerId: fallbackId }
+            : entry
+        ),
+      };
+    }),
+  setTranscriptionSpeaker: (transcriptionId, speakerId) =>
+    set((s) => {
+      if (!s.speakers.some((speaker) => speaker.id === speakerId)) return {};
+      return {
+        transcriptions: s.transcriptions.map((entry) =>
+          entry.id === transcriptionId ? { ...entry, speakerId } : entry
+        ),
       };
     }),
   clearTranscriptions: () => set({ transcriptions: [] }),
