@@ -55,10 +55,11 @@ class SummaryChatMessage(BaseModel):
 
 
 class SummaryChatRequest(BaseModel):
-    prompt:   str
-    title:    Optional[str] = None
-    summary:  Optional[str] = None
-    model:    Optional[str] = None
+    prompt:         str
+    title:          Optional[str] = None
+    summary:        Optional[str] = None
+    manual_summary: Optional[str] = None
+    model:          Optional[str] = None
     messages: List[SummaryChatMessage] = Field(default_factory=list)
 
 

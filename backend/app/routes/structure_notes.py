@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from app.database import get_session, structure_notes_db
 from app.schemas.structure_note import (
     StructureNoteDocument,
+    TestSummaryAutoUpdateRequest,
     TestSummaryStatus,
     TestSummaryUpdateRequest,
     VoiceChunkRequest,
@@ -18,6 +19,7 @@ from app.schemas.structure_note import (
 )
 from app.services.structure_note_engine import (
     apply_voice_chunk,
+    auto_update_test_summary,
     get_or_create_structure_note,
     utc_iso_timestamp,
 )
@@ -58,6 +60,22 @@ async def update_test_summary(sid: str, body: TestSummaryUpdateRequest):
     doc.test_summary.generated_at = timestamp
     doc.test_summary.error = None
     doc.updated_at = timestamp
+
+    payload = document_to_storage_dict(doc)
+    structure_notes_db[sid] = payload
+    await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, payload)
+    return doc
+
+
+@router.post("/{sid}/structure-note/test-summary/auto-update", response_model=StructureNoteDocument)
+async def auto_update_test_summary_route(sid: str, body: TestSummaryAutoUpdateRequest):
+    if not get_session(sid):
+        raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+
+    try:
+        doc = auto_update_test_summary(sid, body.manual_summary)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     payload = document_to_storage_dict(doc)
     structure_notes_db[sid] = payload

@@ -167,6 +167,19 @@ export function updateStructureNoteTestSummary(
   });
 }
 
+export function autoUpdateStructureNoteTestSummary(
+  sessionId: string,
+  manualSummary: string,
+): Promise<StructureNoteDocument> {
+  return request<StructureNoteDocument>(
+    `/sessions/${sessionId}/structure-note/test-summary/auto-update`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ manual_summary: manualSummary, mode: 'merge' }),
+    },
+  );
+}
+
 // ── Summary assistant ──
 
 export interface SummaryChatMessagePayload {
@@ -185,6 +198,7 @@ export function chatWithSummaryAssistant(
     prompt: string;
     title?: string;
     summary?: string;
+    manual_summary?: string;
     model?: string;
     messages?: SummaryChatMessagePayload[];
   },
@@ -195,6 +209,7 @@ export function chatWithSummaryAssistant(
       prompt: payload.prompt,
       title: payload.title,
       summary: payload.summary,
+      manual_summary: payload.manual_summary,
       model: payload.model,
       messages: payload.messages ?? [],
     }),

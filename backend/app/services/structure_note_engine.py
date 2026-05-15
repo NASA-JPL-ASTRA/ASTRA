@@ -367,6 +367,154 @@ def _offline_test_summary_markdown(
     return "\n\n".join(lines)
 
 
+_DATA_IMAGE_MD_RE = re.compile(
+    r"!\[[^\]\r\n]*\]\(data:image/(?:png|jpe?g|gif|webp);base64,[^)]+\)",
+    re.IGNORECASE,
+)
+
+
+def _protect_markdown_data_images(markdown: str) -> tuple[str, Dict[str, str]]:
+    images: Dict[str, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        token = f"[[PASTED_IMAGE_{len(images) + 1}]]"
+        images[token] = match.group(0)
+        return token
+
+    return _DATA_IMAGE_MD_RE.sub(replace, markdown), images
+
+
+def _restore_markdown_data_images(markdown: str, images: Dict[str, str]) -> str:
+    out = markdown
+    missing: List[str] = []
+    for token, image_markdown in images.items():
+        if token in out:
+            out = out.replace(token, image_markdown)
+        elif image_markdown not in out:
+            missing.append(image_markdown)
+    if missing:
+        out = f"{out.rstrip()}\n\n" + "\n\n".join(missing)
+    return out.strip()
+
+
+def _offline_auto_update_summary(
+    manual_summary: str,
+    transcript_segments: List[dict],
+    doc: StructureNoteDocument,
+) -> str:
+    parts: List[str] = []
+    if manual_summary.strip():
+        parts.append(manual_summary.strip())
+
+    recent = [seg["text"].strip() for seg in transcript_segments[-6:] if seg.get("text")]
+    if recent:
+        parts.extend(
+            [
+                "## Recent updates",
+                _one_sentence_summary(" ".join(recent), max_words=70, max_chars=420),
+            ]
+        )
+
+    if doc.detail_notes.paragraphs:
+        detail = [
+            _one_sentence_summary(detailNote.source_transcript_excerpt or detailNote.bullet_markdown, 22, 160)
+            for detailNote in doc.detail_notes.paragraphs[-4:]
+        ]
+        detail = [line for line in detail if line]
+        if detail:
+            parts.extend(["## Detail note context", *[f"- {line}" for line in detail]])
+
+    return "\n\n".join(parts).strip() or "No summary content is available yet."
+
+
+def auto_update_test_summary(session_id: str, manual_summary: str) -> StructureNoteDocument:
+    """
+    Operator-triggered merge: combine manual summary with current transcript context.
+    Unlike session finalization, this is allowed to replace the summary because the
+    operator explicitly requested it.
+    """
+    session = get_session(session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    doc = get_or_create_structure_note(session_id)
+    protected_manual, protected_images = _protect_markdown_data_images(manual_summary.strip())
+
+    notes = sorted(get_notes_by_session(session_id), key=lambda n: str(n.get("timestamp", "")))
+    transcript_segments: List[dict] = []
+    for n in notes:
+        c = (n.get("content") or "").strip()
+        if c:
+            transcript_segments.append({"timestamp": str(n.get("timestamp")), "text": c})
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You update a live ASTRA Test summary by merging operator-written notes with "
+                "the latest transcript context. Return ONLY JSON with keys: content_markdown "
+                "(string), generated_at (string, ISO 8601 with timezone UTC). Preserve the "
+                "operator's intent and important wording. Integrate new transcript information "
+                "concisely; do not paste raw transcript. Keep Markdown image placeholders such "
+                "as [[PASTED_IMAGE_1]] exactly where they belong. Do not remove image placeholders. "
+                "Do not include a top-level heading that repeats 'Test summary'. Use English unless "
+                "the operator-written notes are primarily another language."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "session_name": session.get("name"),
+                    "session_status": session.get("status"),
+                    "session_description": (session.get("description") or "").strip(),
+                    "manual_summary_markdown": protected_manual,
+                    "transcript_segments": transcript_segments,
+                    "detail_notes": [
+                        {
+                            "time_anchor": p.time_anchor,
+                            "text": p.source_transcript_excerpt or p.bullet_markdown,
+                        }
+                        for p in doc.detail_notes.paragraphs[-20:]
+                    ],
+                    "anomaly_cards": [
+                        {"title": a.title, "description": a.description, "severity": a.severity}
+                        for a in doc.anomalies
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+
+    parsed = _chat_completion_json(messages)
+    if parsed is not None:
+        try:
+            out = TestSummaryLLMOutput.model_validate(parsed)
+            content = _restore_markdown_data_images(
+                out.content_markdown.strip() or protected_manual,
+                protected_images,
+            )
+            doc.test_summary = TestSummary(
+                status=TestSummaryStatus.ready,
+                generated_at=out.generated_at or utc_iso_timestamp(),
+                content_markdown=content,
+                error=None,
+            )
+            return _save(doc)
+        except Exception as e:
+            logger.warning("Auto-update summary LLM validation failed: %s", e)
+
+    content = _offline_auto_update_summary(protected_manual, transcript_segments, doc)
+    doc.test_summary = TestSummary(
+        status=TestSummaryStatus.ready,
+        generated_at=utc_iso_timestamp(),
+        content_markdown=_restore_markdown_data_images(content, protected_images),
+        error=None,
+    )
+    return _save(doc)
+
+
 def finalize_session_structure_note(session_id: str) -> None:
     """
     Called when recording session ends. Fills test_summary only (anomalies/detail unchanged).
@@ -379,6 +527,10 @@ def finalize_session_structure_note(session_id: str) -> None:
         return
 
     doc = get_or_create_structure_note(session_id)
+    if doc.test_summary.status == TestSummaryStatus.ready and doc.test_summary.content_markdown.strip():
+        logger.info("finalize_session_structure_note: preserving operator summary for %s", session_id)
+        return
+
     doc.test_summary.status = TestSummaryStatus.generating
     doc.test_summary.error = None
     _save(doc)

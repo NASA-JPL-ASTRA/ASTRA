@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
   Download,
+  Pencil,
   Loader2,
   MessageSquareText,
   RotateCcw,
+  Save,
   Search,
   Send,
   Sparkles,
   X,
 } from 'lucide-react';
 import {
+  autoUpdateStructureNoteTestSummary,
   chatWithSummaryAssistant,
   exportNotes,
   getSession,
@@ -31,6 +34,7 @@ import {
 import type { BackendNote, StructureNoteDetailParagraph, StructureNoteDocument } from '../types';
 
 const SPEAKER_COLORS = ['#00d4ff', '#00e676', '#b388ff', '#ffab00', '#ff5252'];
+const MAX_PASTED_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const DEMO_SESSION: BackendSession = {
   id: 'preview',
@@ -240,7 +244,32 @@ function detailNoteBodyText(p: StructureNoteDetailParagraph): string {
 }
 
 const STRUCTURE_MD_BODY_CLASS =
-  'structure-md text-[15px] leading-7 text-text-secondary [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-text-primary [&_a]:text-accent-cyan [&_a]:underline [&_code]:rounded [&_code]:bg-space-black/50 [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-text-primary [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-text-primary [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-text-primary';
+  'structure-md text-[15px] leading-7 text-text-secondary [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-text-primary [&_a]:text-accent-cyan [&_a]:underline [&_code]:rounded [&_code]:bg-space-black/50 [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-text-primary [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-text-primary [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-text-primary [&_img]:my-3 [&_img]:max-h-[520px] [&_img]:max-w-full [&_img]:rounded-md [&_img]:border [&_img]:border-space-border/60';
+
+function structureMarkdownUrlTransform(value: string, key: string): string {
+  if (key === 'src' && /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(value)) {
+    return value;
+  }
+  return defaultUrlTransform(value);
+}
+
+function imageFileToMarkdown(file: File, index: number): Promise<string> {
+  if (file.size > MAX_PASTED_IMAGE_BYTES) {
+    throw new Error('Pasted image is too large. Use an image under 5 MB.');
+  }
+
+  const alt = (file.name || `pasted-image-${index + 1}`)
+    .replace(/\.[^.]+$/, '')
+    .replace(/[[\]\n\r]/g, ' ')
+    .trim() || `pasted-image-${index + 1}`;
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(`![${alt}](${String(reader.result)})`);
+    reader.onerror = () => reject(new Error('Could not read the pasted image.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 function speakerColor(speaker: string, speakers: string[]): string {
   const idx = Math.max(0, speakers.indexOf(speaker));
@@ -277,6 +306,7 @@ export default function SessionDetailPage() {
   const navigate = useNavigate();
   const workspaceRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
+  const summaryTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [session, setSession] = useState<BackendSession | null>(null);
   const [notes, setNotes] = useState<BackendNote[]>([]);
@@ -290,8 +320,14 @@ export default function SessionDetailPage() {
   });
   const [pendingSummaryPreview, setPendingSummaryPreview] = useState<string | null>(null);
   const [lastAppliedSummaryBackup, setLastAppliedSummaryBackup] = useState<string | null>(null);
+  const [isSummaryEditing, setIsSummaryEditing] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
+  const [summarySaveState, setSummarySaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [aiBusy, setAiBusy] = useState(false);
   const [applyingPreview, setApplyingPreview] = useState(false);
+  const [autoUpdatingSummary, setAutoUpdatingSummary] = useState(false);
+  const [savingSummaryEdit, setSavingSummaryEdit] = useState(false);
   const [revertingSummary, setRevertingSummary] = useState(false);
   const [summaryWidth, setSummaryWidth] = useState(58);
   const [transcriptHeight, setTranscriptHeight] = useState(55);
@@ -326,6 +362,9 @@ export default function SessionDetailPage() {
         setTitle(`${loadedSession.name} Meeting Summary`);
         setPendingSummaryPreview(null);
         setLastAppliedSummaryBackup(null);
+        setIsSummaryEditing(loadedSession.status === 'active');
+        setSummaryEditError(null);
+        setSummarySaveState('idle');
         if (isPreview) {
           setStructureNote(DEMO_STRUCTURE_NOTE);
         } else {
@@ -387,6 +426,72 @@ export default function SessionDetailPage() {
     );
   }, [query, transcriptBlocks]);
   const currentSummaryMarkdown = structureNote?.test_summary.content_markdown || '';
+  const activeSummaryMarkdown = isSummaryEditing ? summaryDraft : currentSummaryMarkdown;
+
+  const canEditSummary = Boolean(session) && !savingSummaryEdit;
+
+  const replaceTestSummary = useCallback(
+    async (contentMarkdown: string): Promise<StructureNoteDocument> => {
+      if (!id) throw new Error('Missing session id');
+      if (id === 'preview') {
+        const next: StructureNoteDocument = {
+          ...(structureNote ?? DEMO_STRUCTURE_NOTE),
+          updated_at: new Date().toISOString(),
+          test_summary: {
+            ...(structureNote ?? DEMO_STRUCTURE_NOTE).test_summary,
+            status: 'ready',
+            generated_at: new Date().toISOString(),
+            content_markdown: contentMarkdown,
+            error: null,
+          },
+        };
+        setStructureNote(next);
+        return next;
+      }
+      const updated = await updateStructureNoteTestSummary(id, contentMarkdown);
+      setStructureNote(updated);
+      return updated;
+    },
+    [id, structureNote],
+  );
+
+  useEffect(() => {
+    if (!isSummaryEditing) {
+      setSummaryDraft(currentSummaryMarkdown);
+    }
+  }, [currentSummaryMarkdown, isSummaryEditing]);
+
+  useEffect(() => {
+    if (!isSummaryEditing || !id || autoUpdatingSummary) return;
+    if (!summaryDraft.trim() || summaryDraft === currentSummaryMarkdown) return;
+
+    let cancelled = false;
+    const timeout = window.setTimeout(async () => {
+      setSummarySaveState('saving');
+      setSummaryEditError(null);
+      try {
+        await replaceTestSummary(summaryDraft);
+        if (!cancelled) setSummarySaveState('saved');
+      } catch (err) {
+        if (!cancelled) {
+          setSummarySaveState('error');
+          setSummaryEditError(err instanceof Error ? err.message : 'Could not autosave the summary.');
+        }
+      }
+    }, 900);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [
+    autoUpdatingSummary,
+    currentSummaryMarkdown,
+    id,
+    isSummaryEditing,
+    replaceTestSummary,
+    summaryDraft,
+  ]);
 
   const handleTitleChange = (value: string) => {
     setTitle(value);
@@ -468,7 +573,7 @@ export default function SessionDetailPage() {
     try {
       if (id === 'preview') {
         const draft = [
-          stripDuplicateSummaryHeading(currentSummaryMarkdown) || 'Dry run completed.',
+          stripDuplicateSummaryHeading(activeSummaryMarkdown) || 'Dry run completed.',
           '',
           `Requested change (${getSummaryModelLabel(selectedSummaryModel)}): ${prompt}`,
         ].join('\n');
@@ -487,7 +592,8 @@ export default function SessionDetailPage() {
       const result = await chatWithSummaryAssistant(id, {
         prompt,
         title,
-        summary: currentSummaryMarkdown,
+        summary: activeSummaryMarkdown,
+        manual_summary: activeSummaryMarkdown,
         model: selectedSummaryModel,
         messages: aiMessages.map((message) => ({
           role: message.role,
@@ -522,28 +628,6 @@ export default function SessionDetailPage() {
     }
   };
 
-  const replaceTestSummary = async (contentMarkdown: string): Promise<StructureNoteDocument> => {
-    if (!id) throw new Error('Missing session id');
-    if (id === 'preview') {
-      const next: StructureNoteDocument = {
-        ...(structureNote ?? DEMO_STRUCTURE_NOTE),
-        updated_at: new Date().toISOString(),
-        test_summary: {
-          ...(structureNote ?? DEMO_STRUCTURE_NOTE).test_summary,
-          status: 'ready',
-          generated_at: new Date().toISOString(),
-          content_markdown: contentMarkdown,
-          error: null,
-        },
-      };
-      setStructureNote(next);
-      return next;
-    }
-    const updated = await updateStructureNoteTestSummary(id, contentMarkdown);
-    setStructureNote(updated);
-    return updated;
-  };
-
   const handleApplySummaryPreview = async () => {
     if (!pendingSummaryPreview || applyingPreview) return;
     setApplyingPreview(true);
@@ -571,6 +655,136 @@ export default function SessionDetailPage() {
       ]);
     } finally {
       setApplyingPreview(false);
+    }
+  };
+
+  const handleStartSummaryEdit = () => {
+    setSummaryDraft(currentSummaryMarkdown);
+    setSummaryEditError(null);
+    setSummarySaveState('idle');
+    setIsSummaryEditing(true);
+  };
+
+  const handleCancelSummaryEdit = () => {
+    setSummaryDraft(currentSummaryMarkdown);
+    setSummaryEditError(null);
+    setSummarySaveState('idle');
+    setIsSummaryEditing(false);
+  };
+
+  const handleSummaryPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith('image/'),
+    );
+    if (imageFiles.length === 0) return;
+
+    event.preventDefault();
+    setSummaryEditError(null);
+    setSummarySaveState('idle');
+
+    const textarea = event.currentTarget;
+    const current = textarea.value;
+    const selectionStart = textarea.selectionStart;
+    const selectionEnd = textarea.selectionEnd;
+
+    try {
+      const markdownImages = await Promise.all(imageFiles.map(imageFileToMarkdown));
+      const insertion = markdownImages.join('\n\n');
+      const needsPrefix = selectionStart > 0 && !current.slice(0, selectionStart).endsWith('\n');
+      const needsSuffix = selectionEnd < current.length && !current.slice(selectionEnd).startsWith('\n');
+      const prefix = needsPrefix ? '\n\n' : '';
+      const suffix = needsSuffix ? '\n\n' : '';
+      const next =
+        current.slice(0, selectionStart) +
+        prefix +
+        insertion +
+        suffix +
+        current.slice(selectionEnd);
+      const cursorPosition = selectionStart + prefix.length + insertion.length;
+
+      setSummaryDraft(next);
+      requestAnimationFrame(() => {
+        summaryTextareaRef.current?.focus();
+        summaryTextareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+      });
+    } catch (err) {
+      setSummaryEditError(err instanceof Error ? err.message : 'Could not paste the image.');
+    }
+  };
+
+  const handleSaveSummaryEdit = async () => {
+    if (!canEditSummary) return;
+    setSavingSummaryEdit(true);
+    setSummaryEditError(null);
+    setSummarySaveState('saving');
+    try {
+      setLastAppliedSummaryBackup(currentSummaryMarkdown);
+      await replaceTestSummary(summaryDraft);
+      setPendingSummaryPreview(null);
+      setSummarySaveState('saved');
+      setIsSummaryEditing(false);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: 'Saved your manual edit to the Test summary.',
+        },
+      ]);
+    } catch (err) {
+      setLastAppliedSummaryBackup(null);
+      setSummarySaveState('error');
+      setSummaryEditError(err instanceof Error ? err.message : 'Could not save the summary.');
+    } finally {
+      setSavingSummaryEdit(false);
+    }
+  };
+
+  const handleAutoUpdateSummary = async () => {
+    if (!id || autoUpdatingSummary) return;
+    const manualSummary = isSummaryEditing ? summaryDraft : currentSummaryMarkdown;
+    setAutoUpdatingSummary(true);
+    setSummaryEditError(null);
+    setSummarySaveState('saving');
+    setLastAppliedSummaryBackup(manualSummary);
+
+    try {
+      if (id === 'preview') {
+        const recentTranscript = transcriptBlocks
+          .slice(-4)
+          .map((block) => `${block.speaker}: ${block.content}`)
+          .join('\n');
+        const merged = [
+          manualSummary.trim() || 'Live summary draft.',
+          '',
+          '## Recent updates',
+          recentTranscript || 'No transcript updates available.',
+        ].join('\n');
+        await replaceTestSummary(merged);
+        setSummaryDraft(merged);
+      } else {
+        const updated = await autoUpdateStructureNoteTestSummary(id, manualSummary);
+        const merged = updated.test_summary.content_markdown;
+        setStructureNote(updated);
+        setSummaryDraft(merged);
+      }
+      setPendingSummaryPreview(null);
+      setIsSummaryEditing(true);
+      setSummarySaveState('saved');
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant_${Date.now()}`,
+          role: 'assistant',
+          content: 'Auto-updated the Test summary with the latest transcript and your manual notes.',
+        },
+      ]);
+      requestAnimationFrame(() => summaryTextareaRef.current?.focus());
+    } catch (err) {
+      setSummarySaveState('error');
+      setSummaryEditError(err instanceof Error ? err.message : 'Could not auto update the summary.');
+    } finally {
+      setAutoUpdatingSummary(false);
     }
   };
 
@@ -737,10 +951,98 @@ export default function SessionDetailPage() {
             </p>
 
             <div>
-              <h2 className="mb-2 text-sm font-semibold text-text-primary">1. Test summary</h2>
-              {session.status !== 'ended' ? (
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-text-primary">1. Test summary</h2>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handleAutoUpdateSummary}
+                    disabled={autoUpdatingSummary}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-accent-cyan transition-colors hover:bg-accent-cyan/10 disabled:opacity-40"
+                  >
+                    {autoUpdatingSummary ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5" />
+                    )}
+                    Auto update
+                  </button>
+                  {!isSummaryEditing && (
+                    <button
+                      type="button"
+                      onClick={handleStartSummaryEdit}
+                      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      {session.status === 'active' ? 'Live edit' : 'Edit'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {isSummaryEditing ? (
+                <div className="rounded-lg border border-accent-cyan/40 bg-space-card/30">
+                  <textarea
+                    ref={summaryTextareaRef}
+                    value={summaryDraft}
+                    onChange={(event) => {
+                      setSummaryDraft(event.target.value);
+                      setSummarySaveState('idle');
+                    }}
+                    onPaste={handleSummaryPaste}
+                    placeholder={
+                      session.status === 'active'
+                        ? 'Write live notes while recording...'
+                        : 'Write the Test summary in Markdown...'
+                    }
+                    className="min-h-[260px] w-full resize-y rounded-t-lg border-0 bg-transparent px-4 py-3 font-mono text-sm leading-6 text-text-primary outline-none placeholder:text-text-muted"
+                  />
+                  {summaryEditError && (
+                    <p className="border-t border-red-500/30 px-4 py-2 text-xs text-red-200">
+                      {summaryEditError}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between gap-3 border-t border-space-border/60 px-4 py-3">
+                    <p className="text-xs text-text-muted">
+                      {autoUpdatingSummary
+                        ? 'Updating from transcript...'
+                        : summarySaveState === 'saving'
+                        ? 'Autosaving...'
+                        : summarySaveState === 'saved'
+                          ? 'Saved'
+                          : summarySaveState === 'error'
+                            ? 'Autosave failed'
+                            : session.status === 'active'
+                              ? 'Autosaves while you type'
+                              : 'Markdown and pasted images are supported'}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCancelSummaryEdit}
+                        disabled={savingSummaryEdit}
+                        className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-space-card hover:text-text-primary disabled:opacity-40"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveSummaryEdit}
+                        disabled={!canEditSummary}
+                        className="flex items-center gap-1.5 rounded-md bg-accent-cyan px-3 py-1.5 text-sm font-medium text-space-black transition-opacity hover:opacity-90 disabled:opacity-40"
+                      >
+                        {savingSummaryEdit ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4" />
+                        )}
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : session.status !== 'ended' ? (
                 <div className="rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
-                  Recording still active. End the session to generate the test summary.
+                  Recording still active. Use Live edit to write the summary as the session runs.
                 </div>
               ) : structureNote?.test_summary.status === 'generating' ? (
                 <div className="flex items-center gap-2 rounded-lg border border-space-border/60 bg-space-card/40 px-4 py-3 text-sm text-text-muted">
@@ -751,7 +1053,7 @@ export default function SessionDetailPage() {
                 <div
                   className={`rounded-lg border border-space-border/60 bg-space-card/30 px-4 py-3 ${STRUCTURE_MD_BODY_CLASS}`}
                 >
-                  <ReactMarkdown>
+                  <ReactMarkdown urlTransform={structureMarkdownUrlTransform}>
                     {stripDuplicateSummaryHeading(
                       structureNote.test_summary.content_markdown || '',
                     )}
@@ -970,7 +1272,7 @@ export default function SessionDetailPage() {
                     </div>
                   </div>
                   <div className={`max-h-64 overflow-y-auto px-3 py-2 ${STRUCTURE_MD_BODY_CLASS}`}>
-                    <ReactMarkdown>
+                    <ReactMarkdown urlTransform={structureMarkdownUrlTransform}>
                       {stripDuplicateSummaryHeading(pendingSummaryPreview)}
                     </ReactMarkdown>
                   </div>

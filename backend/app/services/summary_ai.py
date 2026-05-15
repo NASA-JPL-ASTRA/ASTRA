@@ -100,19 +100,27 @@ async def chat_about_summary(
     prompt: str,
     title: str | None,
     summary: str | None,
+    manual_summary: str | None,
     model: str | None,
     messages: list[dict],
 ) -> dict[str, str | None]:
     transcript = transcript_text(notes)
     current_summary = summary or "No summary content is available yet."
+    operator_manual_summary = (manual_summary or summary or "").strip()
 
     instructions = (
         "You are the ASTRA note summary assistant. Improve the note summary using "
-        "the transcript as ground truth. Do not invent unsupported facts. Return a "
+        "the transcript as ground truth and the operator-written manual summary as "
+        "high-priority context. Do not invent unsupported facts. Return a "
         "JSON object with keys: message (string) and updated_summary (string or null). "
         "Set updated_summary when the user asks for a rewrite, formatting change, "
         "translation, shorter version, action extraction, or any summary replacement. "
-        "The updated_summary must be Markdown suitable for the Test summary block."
+        "The updated_summary must be Markdown suitable for the Test summary block. "
+        "When producing updated_summary, preserve and integrate the operator manual "
+        "summary. Do not drop manual notes just because they are not present in the "
+        "transcript; treat them as operator-authored observations unless they directly "
+        "contradict transcript evidence. If Markdown image references or placeholders "
+        "appear in the manual summary, keep them intact."
     )
     history = "\n".join(
         f"{item.get('role', 'user')}: {item.get('content', '')}"
@@ -121,6 +129,7 @@ async def chat_about_summary(
     input_text = "\n\n".join([
         f"Title: {title or 'Meeting Summary'}",
         f"Current summary:\n{current_summary}",
+        f"Operator manual summary to preserve and summarize:\n{operator_manual_summary or 'No manual summary provided.'}",
         f"Transcript:\n{transcript or 'No transcript available.'}",
         f"Recent chat:\n{history or 'No previous messages.'}",
         f"User request:\n{prompt}",

@@ -22,6 +22,7 @@ async def chat_with_summary_assistant(sid: str, request: SummaryChatRequest):
         prompt=request.prompt,
         title=request.title,
         summary=request.summary,
+        manual_summary=request.manual_summary,
         model=request.model,
         messages=[message.model_dump() for message in request.messages],
     )

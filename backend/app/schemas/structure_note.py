@@ -96,6 +96,13 @@ class TestSummaryUpdateRequest(BaseModel):
     content_markdown: str = Field(..., min_length=1)
 
 
+class TestSummaryAutoUpdateRequest(BaseModel):
+    """Merge operator-written summary with the latest transcript/context."""
+
+    manual_summary: str = ""
+    mode: str = "merge"
+
+
 class StructureNoteLLMOutput(BaseModel):
     """Validated shape returned by the LLM for voice-chunk updates."""
 
