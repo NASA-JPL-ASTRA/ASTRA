@@ -6,8 +6,12 @@ NASA JPL Testbed Recording and Analysis System
 # Load environment variables from backend/.env BEFORE importing any module
 # that reads them at import time (e.g. app.services.openai_stt).
 import logging
+from pathlib import Path
+
 from dotenv import load_dotenv
-load_dotenv()
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_BACKEND_ROOT / ".env")
 
 import os
 
@@ -38,12 +42,12 @@ def get_cors_origins() -> list[str]:
 
 try:
     from app.routes import telemetry_query
-except ModuleNotFoundError as e:
+except ImportError as e:
     telemetry_query = None
     logger.warning(
-        "Telemetry query routes disabled: missing optional dependency %r. "
-        "Install with: pip install -r requirements.txt (see influxdb-client, scikit-learn, numpy).",
-        e.name,
+        "Telemetry query routes disabled (import error): %s. "
+        "Install backend deps: pip install -r requirements.txt",
+        e,
     )
 
 

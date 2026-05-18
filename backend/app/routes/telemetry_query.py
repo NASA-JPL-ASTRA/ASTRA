@@ -8,12 +8,12 @@ Public paths (with ``prefix="/api"`` on the router): ``/api/query/...``
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from typing import Any, List
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.services.channel_search import search_channel
 from app.services.influx_query import (
     get_channel_value,
     get_recent_events,
@@ -33,6 +33,11 @@ def _upstream_error(exc: Exception) -> HTTPException:
     )
 
 
+def _channel_search_installed() -> bool:
+    """TF-IDF search is optional; avoid importing sklearn at app startup."""
+    return importlib.util.find_spec("sklearn") is not None
+
+
 @router.get("/query", summary="Telemetry query API info")
 def query_api_info() -> dict[str, Any]:
     return {
@@ -44,22 +49,22 @@ def query_api_info() -> dict[str, Any]:
             "/api/query/search",
         ],
         "legacy_flask_paths": ["/channel", "/range", "/events", "/search"],
-        "note": "Use /api/query/* via the ASTRA backend (replaces standalone Flask on :5001).",
+        "channel_search_available": _channel_search_installed(),
+        "note": "Use /api/query/* via the ASTRA backend (replaces standalone Flask on :5001). "
+        "GET /api/query/search needs scikit-learn + numpy (see requirements.txt).",
     }
 
 
 @router.get("/query/channel")
 def channel(
     session: str = Query(..., description="Session id (Influx tag session_id)"),
-    name: str = Query(..., description="Channel name"),
+    channel: str = Query(..., alias="name", description="Channel name"),
     at: float = Query(..., description="Unix time — last sample at or before this instant"),
 ) -> dict[str, Any]:
+    sid = session.strip()
+    ch = channel.strip()
     try:
-        result = get_channel_value(
-            session_id=session,
-            channel=name,
-            at_time=at,
-        )
+        result = get_channel_value(session_id=sid, channel=ch, at_time=at)
     except Exception as e:
         raise _upstream_error(e) from e
 
@@ -67,8 +72,10 @@ def channel(
         raise HTTPException(
             status_code=404,
             detail=(
-                f"No data found for channel '{name}' before timestamp {at} "
-                f"in session '{session}'"
+                f"No data found for channel '{ch}' before timestamp {at} "
+                f"in session '{sid}'. "
+                "Use the same Influx session_id as telemetry/ingestor.py and check "
+                "INFLUX_URL / INFLUX_BUCKET in backend/.env (must match telemetry/query.py)."
             ),
         )
     return result
@@ -77,7 +84,7 @@ def channel(
 @router.get("/query/range")
 def range_query(
     session: str = Query(...),
-    name: str = Query(..., description="Channel name"),
+    channel: str = Query(..., alias="name", description="Channel name"),
     t0: float = Query(..., description="Window start (Unix)"),
     t1: float = Query(..., description="Window end (Unix)"),
 ) -> dict[str, Any]:
@@ -87,10 +94,12 @@ def range_query(
             detail=f"t0 ({t0}) must be less than t1 ({t1})",
         )
 
+    sid = session.strip()
+    ch = channel.strip()
     try:
         result = query_channel_range(
-            session_id=session,
-            channel=name,
+            session_id=sid,
+            channel=ch,
             start_time=t0,
             end_time=t1,
         )
@@ -101,8 +110,8 @@ def range_query(
         raise HTTPException(
             status_code=404,
             detail=(
-                f"No data found for channel '{name}' in window [{t0}, {t1}] "
-                f"in session '{session}'"
+                f"No data found for channel '{ch}' in window [{t0}, {t1}] "
+                f"in session '{sid}'"
             ),
         )
     return result
@@ -125,7 +134,7 @@ def events(
 
     try:
         return get_recent_events(
-            session_id=session,
+            session_id=session.strip(),
             start_time=t0,
             end_time=t1,
             severity=severity,
@@ -143,6 +152,17 @@ def search(
     stripped = (q or "").strip()
     if not stripped:
         raise HTTPException(status_code=400, detail="Missing parameter: q")
+    try:
+        from app.services.channel_search import search_channel
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Channel search needs scikit-learn and numpy. "
+                "Install with: pip install -r requirements.txt "
+                f"({e})"
+            ),
+        ) from e
     try:
         return search_channel(stripped, top_k=k)
     except Exception as e:

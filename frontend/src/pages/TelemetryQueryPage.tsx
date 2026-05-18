@@ -198,6 +198,16 @@ export default function TelemetryQueryPage() {
     setSearchLoading(false);
   }
 
+  /** Range query needs t0 ≤ points and t1 ≥ points; samples often sit slightly *before* channel «at». */
+  function syncRangeFromAt() {
+    const atNum = Number(at);
+    if (Number.isNaN(atNum)) return;
+    const before = 900;
+    const after = 120;
+    setT0(String(Math.max(0, atNum - before)));
+    setT1(String(atNum + after));
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-8 animate-fade-in">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -310,18 +320,34 @@ export default function TelemetryQueryPage() {
         </div>
 
         <div className="min-w-0 space-y-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-text-primary">GET /api/query/range</h2>
-            <button
-              type="button"
-              onClick={runRange}
-              disabled={rangeLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 text-xs font-semibold hover:bg-accent-cyan/25 disabled:opacity-50"
-            >
-              Run
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={syncRangeFromAt}
+                disabled={Number.isNaN(Number(at))}
+                title="Sets t0 = at − 900s and t1 = at + 120s so points just before «at» are inside the window"
+                className="px-2.5 py-1.5 rounded-lg border border-space-border bg-space-card text-[10px] font-semibold text-text-secondary hover:border-accent-cyan/40 hover:text-text-primary disabled:opacity-40"
+              >
+                Sync t0 / t1 from «at»
+              </button>
+              <button
+                type="button"
+                onClick={runRange}
+                disabled={rangeLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 text-xs font-semibold hover:bg-accent-cyan/25 disabled:opacity-50"
+              >
+                Run
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            A 404 here usually means no samples in <span className="font-mono">[t0, t1]</span>. If channel «at»
+            is 1778659940 but your last point is 1778659939.9, using <span className="font-mono">t0=1778659940</span>{' '}
+            excludes it — lower <span className="font-mono">t0</span> or use the button above.
+          </p>
           <div className="grid grid-cols-2 gap-2">
             <label className="block space-y-1">
               <span className="text-[10px] text-text-muted uppercase">t0</span>
