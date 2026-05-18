@@ -12,6 +12,7 @@ notes_db:      Dict[str, dict] = {}
 structure_notes_db: Dict[str, dict] = {}  # session_id -> StructureNoteDocument as dict
 telemetry_db:  List[dict]      = []
 stt_tasks_db:  Dict[str, dict] = {}   # NEW: STT task storage
+voice_telemetry_queries_db: Dict[str, List[dict]] = {}
 
 # WebSocket connections: { session_id: [websocket1, ...] }
 ws_connections: Dict[str, List[Any]] = {}
@@ -37,3 +38,12 @@ def get_telemetry_by_session(session_id: str) -> List[dict]:
 
 def get_stt_tasks_by_session(session_id: str) -> List[dict]:   # NEW
     return [t for t in stt_tasks_db.values() if t["session_id"] == session_id]
+
+
+def add_voice_telemetry_query(record: dict) -> None:
+    sid = record["session_id"]
+    voice_telemetry_queries_db.setdefault(sid, []).append(record)
+
+
+def get_voice_telemetry_queries(session_id: str) -> List[dict]:
+    return list(voice_telemetry_queries_db.get(session_id, []))

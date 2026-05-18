@@ -14,7 +14,16 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import sessions, notes, telemetry, websocket, stt, structure_notes, summaries
+from app.routes import (
+    sessions,
+    notes,
+    telemetry,
+    websocket,
+    stt,
+    structure_notes,
+    summaries,
+    log_telemetry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +76,7 @@ app.include_router(notes.router,     prefix="/api/sessions", tags=["Notes"])
 app.include_router(summaries.router, prefix="/api/sessions", tags=["Summaries"])
 app.include_router(telemetry.router, prefix="/api/sessions", tags=["Telemetry"])
 app.include_router(stt.router,       prefix="/api/sessions", tags=["STT"])
+app.include_router(log_telemetry.router, prefix="/api/sessions", tags=["Log Telemetry"])
 app.include_router(websocket.router, prefix="/ws/sessions",  tags=["WebSocket"])
 if telemetry_query is not None:
     app.include_router(telemetry_query.router, prefix="/api", tags=["Telemetry Query"])
@@ -80,6 +90,7 @@ def root():
         "version": "0.3.0",
         "docs": "/docs",
         "telemetry_query_api": telemetry_query is not None,
+        "log_telemetry_api": True,
     }
 
 

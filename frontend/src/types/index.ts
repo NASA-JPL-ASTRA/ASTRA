@@ -158,6 +158,26 @@ export interface VoiceCommand {
   response?: string;
 }
 
+export interface VoiceTelemetryQuery {
+  id: string;
+  session_id?: string;
+  transcript: string;
+  action: string;
+  scenario: string;
+  intent?: Record<string, unknown>;
+  answer: string;
+  is_telemetry_query: boolean;
+  created_at: string;
+  status?: 'pending' | 'done' | 'failed';
+}
+
+export interface LogTelemetryScenariosInfo {
+  telemetry_root: string;
+  scenarios: string[];
+  default_scenario: string;
+  enabled: boolean;
+}
+
 export interface SystemStats {
   activeSessions: number;
   totalLogs: number;

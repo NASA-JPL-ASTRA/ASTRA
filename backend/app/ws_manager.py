@@ -20,6 +20,8 @@ EVENT_STT_TASK_DONE    = "stt.task.done"
 EVENT_STT_CHUNK_READY  = "transcript.chunk.ready"
 
 EVENT_STRUCTURE_NOTE_UPDATED = "structure_note.updated"
+EVENT_TELEMETRY_QUERY_STARTED = "telemetry.query.started"
+EVENT_TELEMETRY_QUERY_DONE    = "telemetry.query.done"
 
 EVENT_ERROR_OCCURRED   = "error.occurred"   # NEW
 

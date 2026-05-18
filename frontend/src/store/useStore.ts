@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { Session, LogEntry, TelemetryStream, BackendNote } from '../types';
+import type {
+  Session,
+  LogEntry,
+  TelemetryStream,
+  BackendNote,
+  VoiceTelemetryQuery,
+} from '../types';
 import {
   sessions as mockSessions,
   logEntries as mockLogs,
@@ -50,6 +56,12 @@ interface AppState {
   // Live notes from backend (during active session)
   liveNotes: BackendNote[];
 
+  // Log-file telemetry voice queries (during active session)
+  voiceTelemetryQueries: VoiceTelemetryQuery[];
+  pendingTelemetryQueryId: string | null;
+  telemetryScenarios: string[];
+  defaultTelemetryScenario: string | null;
+
   // UI
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -88,6 +100,12 @@ interface AppState {
   updateLiveNote: (noteId: string, note: BackendNote) => void;
   removeLiveNote: (noteId: string) => void;
   clearLiveNotes: () => void;
+  setTelemetryScenariosInfo: (scenarios: string[], defaultScenario: string | null) => void;
+  addPendingVoiceTelemetryQuery: (transcript: string) => string;
+  resolveVoiceTelemetryQuery: (pendingId: string, result: VoiceTelemetryQuery) => void;
+  failVoiceTelemetryQuery: (pendingId: string, message: string) => void;
+  upsertVoiceTelemetryQuery: (query: VoiceTelemetryQuery) => void;
+  clearVoiceTelemetryQueries: () => void;
   updateAudioLevel: (level: number) => void;
   setRecordingError: (error: string | null) => void;
   setSessionStartTime: (time: Date | null) => void;
@@ -148,6 +166,10 @@ export const useStore = create<AppState>((set, get) => ({
   speakers: defaultSpeakers,
   activeSpeakerId: DEFAULT_SPEAKER_ID,
   liveNotes: [],
+  voiceTelemetryQueries: [],
+  pendingTelemetryQueryId: null,
+  telemetryScenarios: [],
+  defaultTelemetryScenario: null,
 
   sidebarCollapsed: false,
   sidebarWidth: 240,
@@ -279,6 +301,80 @@ export const useStore = create<AppState>((set, get) => ({
       liveNotes: s.liveNotes.filter((n) => n.id !== noteId),
     })),
   clearLiveNotes: () => set({ liveNotes: [] }),
+  setTelemetryScenariosInfo: (scenarios, defaultScenario) =>
+    set({ telemetryScenarios: scenarios, defaultTelemetryScenario: defaultScenario }),
+  addPendingVoiceTelemetryQuery: (transcript) => {
+    const id = `vtq_local_${Math.random().toString(36).slice(2, 10)}`;
+    const entry: VoiceTelemetryQuery = {
+      id,
+      transcript,
+      action: 'unknown',
+      scenario: get().defaultTelemetryScenario ?? '',
+      answer: '',
+      is_telemetry_query: false,
+      created_at: new Date().toISOString(),
+      status: 'pending',
+    };
+    set((s) => ({
+      voiceTelemetryQueries: [...s.voiceTelemetryQueries, entry],
+      pendingTelemetryQueryId: id,
+    }));
+    return id;
+  },
+  resolveVoiceTelemetryQuery: (pendingId, result) =>
+    set((s) => ({
+      voiceTelemetryQueries: s.voiceTelemetryQueries.map((q) =>
+        q.id === pendingId
+          ? { ...result, status: 'done' as const }
+          : q,
+      ),
+      pendingTelemetryQueryId:
+        s.pendingTelemetryQueryId === pendingId ? null : s.pendingTelemetryQueryId,
+    })),
+  failVoiceTelemetryQuery: (pendingId, message) =>
+    set((s) => ({
+      voiceTelemetryQueries: s.voiceTelemetryQueries.map((q) =>
+        q.id === pendingId
+          ? {
+              ...q,
+              status: 'failed' as const,
+              answer: message,
+              is_telemetry_query: false,
+            }
+          : q,
+      ),
+      pendingTelemetryQueryId:
+        s.pendingTelemetryQueryId === pendingId ? null : s.pendingTelemetryQueryId,
+    })),
+  upsertVoiceTelemetryQuery: (query) =>
+    set((s) => {
+      const normalized = {
+        ...query,
+        status: (query.status ?? 'done') as VoiceTelemetryQuery['status'],
+      };
+      const isDone = normalized.status === 'done';
+      const filtered = isDone
+        ? s.voiceTelemetryQueries.filter(
+            (q) =>
+              q.id === query.id ||
+              (q.status === 'pending' && q.transcript !== query.transcript),
+          )
+        : s.voiceTelemetryQueries;
+      const exists = filtered.some((q) => q.id === query.id);
+      const next = exists
+        ? filtered.map((q) => (q.id === query.id ? normalized : q))
+        : [...filtered, normalized];
+      return {
+        voiceTelemetryQueries: next,
+        pendingTelemetryQueryId:
+          normalized.status === 'pending' ? query.id : null,
+      };
+    }),
+  clearVoiceTelemetryQueries: () =>
+    set({
+      voiceTelemetryQueries: [],
+      pendingTelemetryQueryId: null,
+    }),
   updateAudioLevel: (level) => set({ audioLevel: level }),
   setRecordingError: (error) => set({ recordingError: error }),
   setSessionStartTime: (time) => set({ sessionStartTime: time }),

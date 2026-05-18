@@ -1,5 +1,11 @@
 import { API_URL } from '../config/env';
-import type { BackendNote, NoteType, StructureNoteDocument } from '../types';
+import type {
+  BackendNote,
+  LogTelemetryScenariosInfo,
+  NoteType,
+  StructureNoteDocument,
+  VoiceTelemetryQuery,
+} from '../types';
 
 // ── Session types ──
 
@@ -401,4 +407,37 @@ export function searchTelemetryChannels(
 ): Promise<TelemetryQueryResult<ChannelSearchHit[]>> {
   const params = new URLSearchParams({ q, k: String(k) });
   return fetchTelemetryQuery<ChannelSearchHit[]>(`/query/search?${params}`);
+}
+
+// ── Log-file voice telemetry (event.log / channel.log) ──
+
+export function getLogTelemetryScenarios(): Promise<LogTelemetryScenariosInfo> {
+  return request<LogTelemetryScenariosInfo>('/sessions/telemetry/log-scenarios', {
+    method: 'GET',
+  });
+}
+
+export function listVoiceTelemetryQueries(
+  sessionId: string,
+): Promise<VoiceTelemetryQuery[]> {
+  return request<VoiceTelemetryQuery[]>(
+    `/sessions/${sessionId}/telemetry/voice-queries`,
+    { method: 'GET' },
+  );
+}
+
+export function queryVoiceTelemetry(
+  sessionId: string,
+  transcript: string,
+  scenario?: string,
+): Promise<VoiceTelemetryQuery> {
+  const payload: { transcript: string; scenario?: string } = { transcript };
+  if (scenario) payload.scenario = scenario;
+  return request<VoiceTelemetryQuery>(
+    `/sessions/${sessionId}/telemetry/voice-query`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
 }
