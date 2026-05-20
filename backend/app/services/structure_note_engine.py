@@ -462,21 +462,54 @@ def _strip_live_transcript_updates(markdown: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
+def _strip_transcript_timestamps(text: str) -> str:
+    """
+    Remove timestamp prefixes from transcript text while preserving speaker labels.
+    Handles existing auto-update lines such as "- [2026-...] Speaker: text" and
+    common ASR timestamp forms such as "[00:01:23] text".
+    """
+    bracketed_timestamp = (
+        r"\[(?:"
+        r"\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+        r"|(?:\d{1,2}:){1,2}\d{1,2}(?:\.\d+)?"
+        r")\]"
+    )
+    cleaned = re.sub(
+        rf"(^|\n)(\s*[-*]\s+){bracketed_timestamp}\s+([^:\n]{{1,80}}:\s*)",
+        r"\1\2\3",
+        text,
+    )
+    cleaned = re.sub(
+        rf"(^|\n)(\s*){bracketed_timestamp}\s+",
+        r"\1\2",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"(^|\n)(\s*[-*]\s+)(?:\d{1,2}:){1,2}\d{1,2}(?:\.\d+)?\s+",
+        r"\1\2",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"(^|\n)(\s*)(?:\d{1,2}:){1,2}\d{1,2}(?:\.\d+)?\s+",
+        r"\1\2",
+        cleaned,
+    )
+    return cleaned.strip()
+
+
 def _format_live_transcript_lines(transcript_segments: List[dict]) -> List[str]:
     lines: List[str] = []
     for seg in transcript_segments:
-        timestamp = str(seg.get("timestamp") or "").strip()
         speaker = str(seg.get("speaker") or "Unknown").strip() or "Unknown"
-        text = str(seg.get("text") or "").strip()
+        text = _strip_transcript_timestamps(str(seg.get("text") or ""))
         if not text:
             continue
-        prefix = f"[{timestamp}] {speaker}: " if timestamp else f"{speaker}: "
-        lines.append(f"- {prefix}{text}")
+        lines.append(f"- {speaker}: {text}")
     return lines
 
 
 def _append_live_transcript_updates(manual_summary: str, transcript_segments: List[dict]) -> str:
-    base = manual_summary.strip()
+    base = _strip_transcript_timestamps(manual_summary)
     lines = _format_live_transcript_lines(transcript_segments)
     if not lines:
         return base or "No summary content is available yet."
@@ -536,11 +569,10 @@ def auto_update_test_summary(
 
     transcript_segments: List[dict] = []
     for n in notes_to_process:
-        c = (n.get("content") or "").strip()
+        c = _strip_transcript_timestamps(str(n.get("content") or ""))
         if c:
             transcript_segments.append(
                 {
-                    "timestamp": str(n.get("timestamp")),
                     "speaker": str(n.get("speaker") or "Unknown"),
                     "text": c,
                 }
@@ -655,9 +687,9 @@ def finalize_session_structure_note(session_id: str) -> None:
     notes = sorted(get_notes_by_session(session_id), key=lambda n: str(n.get("timestamp", "")))
     transcript_segments: List[dict] = []
     for n in notes:
-        c = (n.get("content") or "").strip()
+        c = _strip_transcript_timestamps(str(n.get("content") or ""))
         if c:
-            transcript_segments.append({"timestamp": str(n.get("timestamp")), "text": c})
+            transcript_segments.append({"text": c})
 
     messages = [
         {
