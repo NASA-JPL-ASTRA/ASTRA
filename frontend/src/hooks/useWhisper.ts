@@ -4,10 +4,8 @@ import {
   createSession,
   endSession,
   getLogTelemetryScenarios,
-  queryVoiceTelemetry,
   uploadAudioChunk,
 } from '../services/api';
-import type { VoiceTelemetryQuery } from '../types';
 import { connectSessionWs, type SessionWsConnection } from '../services/sessionWs';
 import type { BackendNote } from '../types';
 
@@ -182,9 +180,6 @@ export function useWhisper() {
     clearLiveNotes,
     clearVoiceTelemetryQueries,
     setTelemetryScenariosInfo,
-    addPendingVoiceTelemetryQuery,
-    upsertVoiceTelemetryQuery,
-    failVoiceTelemetryQuery,
   } = useStore();
 
   // ── Audio capture refs ──
@@ -222,17 +217,6 @@ export function useWhisper() {
   const addLiveNoteRef = useRef(addLiveNote);
   const updateLiveNoteRef = useRef(updateLiveNote);
   const removeLiveNoteRef = useRef(removeLiveNote);
-  const upsertTelemetryRef = useRef(upsertVoiceTelemetryQuery);
-  const addPendingTelemetryRef = useRef(addPendingVoiceTelemetryQuery);
-  const failTelemetryRef = useRef(failVoiceTelemetryQuery);
-
-  const runTelemetryQuery = useCallback((sessionId: string, transcript: string) => {
-    queryVoiceTelemetry(sessionId, transcript)
-      .then((result) => upsertTelemetryRef.current(result))
-      .catch((err) => {
-        console.error('[ASTRA] telemetry query failed:', err);
-      });
-  }, []);
 
   useEffect(() => {
     backendSessionIdRef.current = backendSessionId;
@@ -240,9 +224,6 @@ export function useWhisper() {
     addLiveNoteRef.current = addLiveNote;
     updateLiveNoteRef.current = updateLiveNote;
     removeLiveNoteRef.current = removeLiveNote;
-    upsertTelemetryRef.current = upsertVoiceTelemetryQuery;
-    addPendingTelemetryRef.current = addPendingVoiceTelemetryQuery;
-    failTelemetryRef.current = failVoiceTelemetryQuery;
     selectedSttModelRef.current = selectedSttModel;
   }, [
     backendSessionId,
@@ -250,9 +231,6 @@ export function useWhisper() {
     addLiveNote,
     updateLiveNote,
     removeLiveNote,
-    upsertVoiceTelemetryQuery,
-    addPendingVoiceTelemetryQuery,
-    failVoiceTelemetryQuery,
     selectedSttModel,
   ]);
 
@@ -524,34 +502,12 @@ export function useWhisper() {
               endsSentence(merged) || merged.length > MAX_SENTENCE_CHARS;
             if (shouldFinalize) {
               upsertStreamingRef.current(sid, merged, true);
-              const activeSessionId = backendSessionIdRef.current;
-              if (activeSessionId) {
-                runTelemetryQuery(activeSessionId, merged);
-              }
               sentenceIdRef.current = null;
               sentenceBaseRef.current = '';
             } else {
               sentenceBaseRef.current = merged;
               upsertStreamingRef.current(sid, merged, false);
             }
-          } else if (msg.event === 'telemetry.query.started') {
-            const id = typeof data.id === 'string' ? data.id : '';
-            const transcript =
-              typeof data.transcript === 'string' ? data.transcript : '';
-            if (id && transcript) {
-              upsertTelemetryRef.current({
-                id,
-                transcript,
-                action: 'unknown',
-                scenario: '',
-                answer: '',
-                is_telemetry_query: false,
-                created_at: new Date().toISOString(),
-                status: 'pending',
-              });
-            }
-          } else if (msg.event === 'telemetry.query.done') {
-            upsertTelemetryRef.current(data as unknown as VoiceTelemetryQuery);
           } else if (msg.event === 'note.created') {
             addLiveNoteRef.current(data as unknown as BackendNote);
           } else if (msg.event === 'note.updated') {
@@ -608,7 +564,6 @@ export function useWhisper() {
     clearVoiceTelemetryQueries,
     setTelemetryScenariosInfo,
     dismissSavedToast,
-    runTelemetryQuery,
   ]);
 
   const pauseRecording = useCallback(() => {

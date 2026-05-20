@@ -13,7 +13,6 @@ import {
   Cpu,
 } from 'lucide-react';
 import TranscriptionPanel from '../components/session/TranscriptionPanel';
-import VoiceTelemetryPanel from '../components/session/VoiceTelemetryPanel';
 import { useRecording } from '../contexts/RecordingContext';
 import { useStore } from '../store/useStore';
 import {
@@ -69,15 +68,6 @@ export default function SessionPage() {
       <div className="flex flex-1 min-h-0 gap-4 p-4">
         <div className="flex-1 min-w-0 min-h-0">
           <TranscriptionPanel />
-        </div>
-        <aside className="w-[min(100%,22rem)] shrink-0 min-h-0 hidden lg:block">
-          <VoiceTelemetryPanel />
-        </aside>
-      </div>
-
-      <div className="px-4 pb-2 lg:hidden shrink-0">
-        <div className="h-72 min-h-0">
-          <VoiceTelemetryPanel />
         </div>
       </div>
 

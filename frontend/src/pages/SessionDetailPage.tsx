@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Activity,
   ArrowLeft,
   ChevronDown,
-  ChevronRight,
   Check,
   FileCode2,
   FileJson,
@@ -25,7 +23,6 @@ import {
   X,
 } from 'lucide-react';
 import {
-  askTelemetryQuestion,
   autoUpdateStructureNoteTestSummary,
   chatWithSummaryAssistant,
   getSession,
@@ -33,8 +30,9 @@ import {
   listNotes,
   updateStructureNoteTestSummary,
 } from '../services/api';
-import type { BackendSession, TelemetryAskResponse } from '../services/api';
+import type { BackendSession } from '../services/api';
 import { connectSessionWs } from '../services/sessionWs';
+import VoiceTelemetryPanel from '../components/session/VoiceTelemetryPanel';
 import {
   DEFAULT_SUMMARY_MODEL,
   SUMMARY_MODEL_OPTIONS,
@@ -188,36 +186,6 @@ interface AiDebugMessage {
 
 type ExportFormat = 'markdown' | 'html' | 'json';
 
-interface SpeechRecognitionResultLike {
-  readonly isFinal: boolean;
-  readonly length: number;
-  [index: number]: { transcript: string };
-}
-
-interface SpeechRecognitionEventLike extends Event {
-  readonly resultIndex: number;
-  readonly results: {
-    readonly length: number;
-    [index: number]: SpeechRecognitionResultLike;
-  };
-}
-
-type BrowserSpeechRecognition = EventTarget & {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: Event & { error?: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-type SpeechRecognitionWindow = Window & {
-  SpeechRecognition?: new () => BrowserSpeechRecognition;
-  webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
-};
-
 const SUMMARY_MODEL_STORAGE_KEY = 'astra.summary.model';
 
 function autoUpdateCursorStorageKey(sessionId: string): string {
@@ -256,23 +224,6 @@ function formatTime(dateStr: string): string {
     minute: '2-digit',
     second: '2-digit',
   });
-}
-
-function formatJson(data: unknown): string {
-  try {
-    return JSON.stringify(data, null, 2);
-  } catch {
-    return String(data);
-  }
-}
-
-function defaultTelemetryWindow(session: BackendSession | null): { t0: number; t1: number } {
-  const anchor = session?.telemetry_mock_test1_path
-    ? session.started_at
-    : session?.ended_at || new Date().toISOString();
-  const end = Math.floor(new Date(anchor).getTime() / 1000);
-  const t1 = Number.isFinite(end) ? end : Math.floor(Date.now() / 1000);
-  return { t0: t1 - 400, t1 };
 }
 
 /** Backend may still emit a duplicate heading; the page already shows "Test summary". */
@@ -548,19 +499,12 @@ export default function SessionDetailPage() {
   const workspaceRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const summaryTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const telemetryRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
 
   const [session, setSession] = useState<BackendSession | null>(null);
   const [notes, setNotes] = useState<BackendNote[]>([]);
   const [structureNote, setStructureNote] = useState<StructureNoteDocument | null>(null);
   const [title, setTitle] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
-  const [telemetrySessionId, setTelemetrySessionId] = useState('');
-  const [telemetryQuestion, setTelemetryQuestion] = useState('');
-  const [telemetryResult, setTelemetryResult] = useState<TelemetryAskResponse | null>(null);
-  const [telemetryError, setTelemetryError] = useState<string | null>(null);
-  const [telemetryLoading, setTelemetryLoading] = useState(false);
-  const [telemetryVoiceListening, setTelemetryVoiceListening] = useState(false);
   const [selectedSummaryModel, setSelectedSummaryModel] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_SUMMARY_MODEL;
     return window.localStorage.getItem(SUMMARY_MODEL_STORAGE_KEY) || DEFAULT_SUMMARY_MODEL;
@@ -687,21 +631,7 @@ export default function SessionDetailPage() {
     return () => conn.close();
   }, [id]);
 
-  useEffect(() => {
-    if (session?.id && id !== 'preview') {
-      setTelemetrySessionId(session.id);
-    }
-  }, [id, session?.id]);
-
-  useEffect(() => {
-    return () => {
-      telemetryRecognitionRef.current?.stop();
-      telemetryRecognitionRef.current = null;
-    };
-  }, []);
-
   const transcriptBlocks = useMemo(() => groupTranscript(notes), [notes]);
-  const telemetryWindow = useMemo(() => defaultTelemetryWindow(session), [session]);
   const currentSummaryMarkdown = structureNote?.test_summary.content_markdown || '';
   const activeSummaryMarkdown = isSummaryEditing ? summaryDraft : currentSummaryMarkdown;
   const isActiveRecordingNote = Boolean(isRecording && backendSessionId && id === backendSessionId);
@@ -779,80 +709,6 @@ export default function SessionDetailPage() {
     setSelectedSummaryModel(value);
     window.localStorage.setItem(SUMMARY_MODEL_STORAGE_KEY, value);
   };
-
-  const handleTelemetryAsk = useCallback(async () => {
-    const question = telemetryQuestion.trim();
-    if (!question || telemetryLoading) return;
-    setTelemetryLoading(true);
-    setTelemetryError(null);
-    try {
-      const result = await askTelemetryQuestion({
-        question,
-        session: telemetrySessionId.trim() || undefined,
-        t0: telemetryWindow.t0,
-        t1: telemetryWindow.t1,
-        at: telemetryWindow.t1,
-        severity: 'all',
-        limit: 20,
-      });
-      setTelemetryResult(result);
-      if (result.error) {
-        setTelemetryError(result.error);
-      }
-    } catch (err) {
-      setTelemetryError(err instanceof Error ? err.message : 'Telemetry query failed.');
-    } finally {
-      setTelemetryLoading(false);
-    }
-  }, [telemetryLoading, telemetryQuestion, telemetrySessionId, telemetryWindow.t0, telemetryWindow.t1]);
-
-  const handleTelemetryVoiceInput = useCallback(() => {
-    if (telemetryVoiceListening) {
-      telemetryRecognitionRef.current?.stop();
-      setTelemetryVoiceListening(false);
-      return;
-    }
-
-    const SpeechRecognitionCtor =
-      (window as SpeechRecognitionWindow).SpeechRecognition ??
-      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
-    if (!SpeechRecognitionCtor) {
-      setTelemetryError('Voice input is not supported in this browser.');
-      return;
-    }
-
-    const recognition = new SpeechRecognitionCtor();
-    recognition.lang = navigator.language || 'en-US';
-    recognition.interimResults = true;
-    recognition.continuous = false;
-    recognition.onresult = (event) => {
-      let transcript = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        transcript += event.results[i]?.[0]?.transcript ?? '';
-      }
-      if (transcript.trim()) {
-        setTelemetryQuestion(transcript.trim());
-      }
-    };
-    recognition.onerror = (event) => {
-      setTelemetryError(event.error ? `Voice input failed: ${event.error}` : 'Voice input failed.');
-    };
-    recognition.onend = () => {
-      setTelemetryVoiceListening(false);
-      telemetryRecognitionRef.current = null;
-    };
-
-    telemetryRecognitionRef.current = recognition;
-    setTelemetryVoiceListening(true);
-    setTelemetryError(null);
-    try {
-      recognition.start();
-    } catch (err) {
-      telemetryRecognitionRef.current = null;
-      setTelemetryVoiceListening(false);
-      setTelemetryError(err instanceof Error ? err.message : 'Voice input could not start.');
-    }
-  }, [telemetryVoiceListening]);
 
   const startColumnResize = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1597,144 +1453,35 @@ export default function SessionDetailPage() {
 
         <aside
           ref={sidebarRef}
-          className="min-h-0 overflow-y-scroll bg-space-dark/40"
-          style={{ scrollbarGutter: 'stable' }}
+          className="flex min-h-0 flex-col overflow-hidden bg-space-dark/45"
         >
-          <div className="shrink-0 border-b border-space-border/60 px-5 py-4">
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
-                  <Activity className="h-4 w-4 text-accent-cyan" />
-                  Telemetry data query
-                </h2>
-                <p className="mt-1 text-xs text-text-muted">
-                  {telemetrySessionId || 'No session tag'} · {telemetryWindow.t0} to {telemetryWindow.t1}
-                </p>
-              </div>
-            </div>
-
-            <label className="mb-3 block">
-              <span className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-text-muted">
-                Influx session
-              </span>
-              <input
-                value={telemetrySessionId}
-                onChange={(event) => setTelemetrySessionId(event.target.value)}
-                className="w-full rounded-md border border-space-border/70 bg-space-black px-2.5 py-2 font-mono text-xs text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-cyan/50"
-                placeholder="session_id"
-              />
-            </label>
-
-            <div className="rounded-lg border border-space-border/70 bg-space-black/40">
-              <textarea
-                value={telemetryQuestion}
-                onChange={(event) => setTelemetryQuestion(event.target.value)}
-                onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                    void handleTelemetryAsk();
-                  }
-                }}
-                placeholder="Ask telemetry..."
-                className="min-h-[76px] w-full resize-none rounded-t-lg border-0 bg-transparent px-3 py-2 text-sm leading-5 text-text-primary outline-none placeholder:text-text-muted"
-              />
-              <div className="flex items-center justify-between gap-2 border-t border-space-border/60 px-2.5 py-2">
-                <button
-                  type="button"
-                  onClick={handleTelemetryVoiceInput}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                    telemetryVoiceListening
-                      ? 'bg-accent-red/10 text-accent-red'
-                      : 'text-text-secondary hover:bg-space-card hover:text-text-primary'
-                  }`}
-                >
-                  <Mic className="h-3.5 w-3.5" />
-                  {telemetryVoiceListening ? 'Listening' : 'Voice'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleTelemetryAsk()}
-                  disabled={telemetryLoading || !telemetryQuestion.trim()}
-                  className="flex items-center gap-1.5 rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-medium text-space-black transition-opacity hover:opacity-90 disabled:opacity-40"
-                >
-                  {telemetryLoading ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  )}
-                  Query
-                </button>
-              </div>
-            </div>
-          </div>
-
           <div
-            className="overflow-y-scroll px-5 py-5"
+            className="min-h-[220px] overflow-hidden"
             style={{
               height: `${transcriptHeight}%`,
-              minHeight: 160,
-              scrollbarGutter: 'stable',
             }}
           >
-            {telemetryLoading ? (
-              <div className="flex h-full flex-col items-center justify-center text-center text-text-muted">
-                <Loader2 className="mb-3 h-8 w-8 animate-spin text-accent-cyan" />
-                <p className="text-sm">Querying telemetry...</p>
-              </div>
-            ) : telemetryResult ? (
-              <div className="space-y-4">
-                <section>
-                  <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
-                    Answer
-                  </h3>
-                  <p className="text-sm leading-6 text-text-primary">{telemetryResult.answer}</p>
-                  {(telemetryError || telemetryResult.error) && (
-                    <p className="mt-2 rounded-md border border-red-500/30 bg-red-950/20 px-3 py-2 text-xs text-red-200">
-                      {telemetryError || telemetryResult.error}
-                    </p>
-                  )}
-                </section>
-                <section>
-                  <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
-                    Plan
-                  </h3>
-                  <pre className="max-h-32 overflow-auto rounded-md border border-space-border/60 bg-space-black/50 p-2 text-[11px] leading-5 text-text-secondary">
-                    {formatJson(telemetryResult.plan)}
-                  </pre>
-                </section>
-                <section>
-                  <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
-                    Result
-                  </h3>
-                  <pre className="max-h-56 overflow-auto rounded-md border border-space-border/60 bg-space-black/50 p-2 text-[11px] leading-5 text-text-secondary">
-                    {formatJson(telemetryResult.data)}
-                  </pre>
-                </section>
-              </div>
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center text-center text-text-muted">
-                <Activity className="mb-3 h-10 w-10 opacity-20" />
-                <p className="text-sm">Telemetry results will appear here</p>
-                {telemetryError && (
-                  <p className="mt-2 max-w-xs text-xs text-red-200">{telemetryError}</p>
-                )}
-              </div>
-            )}
+            <VoiceTelemetryPanel
+              sessionId={id === 'preview' ? null : (session?.id ?? null)}
+              variant="embedded"
+            />
           </div>
 
           <div
             onMouseDown={startSidebarResize}
-            className="h-1.5 cursor-row-resize border-y border-space-border/60 bg-space-black transition-colors hover:bg-accent-cyan/20"
-            title="Resize telemetry query"
-          />
+            className="group flex h-3 cursor-row-resize items-center justify-center border-y border-space-border/50 bg-space-black/70 transition-colors hover:border-accent-cyan/40 hover:bg-space-hover/30"
+            title="Resize telemetry query panel"
+          >
+            <div className="h-px w-10 rounded-full bg-space-border transition-colors group-hover:bg-accent-cyan/70" />
+          </div>
 
           <div
-            className="flex min-h-[220px] flex-col overflow-y-scroll px-5 py-4"
+            className="flex min-h-[220px] flex-col overflow-hidden"
             style={{
               height: `${100 - transcriptHeight}%`,
-              scrollbarGutter: 'stable',
             }}
           >
-            <div className="mb-3">
+            <div className="border-b border-space-border/60 px-5 py-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
@@ -1758,7 +1505,7 @@ export default function SessionDetailPage() {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-scroll pr-1" style={{ scrollbarGutter: 'stable' }}>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-scroll px-5 py-4" style={{ scrollbarGutter: 'stable' }}>
               {pendingSummaryPreview && (
                 <section className="rounded-md border border-accent-cyan/40 bg-accent-cyan/5">
                   <div className="flex items-center justify-between gap-2 border-b border-accent-cyan/20 px-3 py-2">
@@ -1838,7 +1585,7 @@ export default function SessionDetailPage() {
               ))}
             </div>
 
-            <div className="mt-3 flex items-end gap-2 border-t border-space-border/60 pt-3">
+            <div className="flex items-end gap-2 border-t border-space-border/60 px-5 py-3">
               <textarea
                 value={aiPrompt}
                 onChange={(event) => setAiPrompt(event.target.value)}

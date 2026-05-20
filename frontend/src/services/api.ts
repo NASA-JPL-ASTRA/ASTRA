@@ -441,3 +441,27 @@ export function queryVoiceTelemetry(
     },
   );
 }
+
+export async function queryVoiceTelemetryAudio(
+  sessionId: string,
+  audioBlob: Blob,
+  options?: { scenario?: string; model?: string },
+): Promise<VoiceTelemetryQuery> {
+  const extension = audioBlob.type.includes('webm') ? 'webm' : 'wav';
+  const form = new FormData();
+  form.append('file', audioBlob, `telemetry-query.${extension}`);
+  if (options?.scenario) form.append('scenario', options.scenario);
+  if (options?.model) form.append('model', options.model);
+
+  const response = await fetch(
+    `${API_URL}/sessions/${sessionId}/telemetry/voice-query/audio`,
+    { method: 'POST', body: form },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Voice telemetry ${response.status}: ${body || response.statusText}`);
+  }
+
+  return response.json() as Promise<VoiceTelemetryQuery>;
+}
