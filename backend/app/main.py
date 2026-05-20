@@ -34,6 +34,7 @@ def get_cors_origins() -> list[str]:
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
+        "https://astra-olive-omega.vercel.app",
         "https://astra-git-main-volcano-mites-projects.vercel.app",
         "https://astra-qtlz6uxdg-volcano-mites-projects.vercel.app",
     ]
