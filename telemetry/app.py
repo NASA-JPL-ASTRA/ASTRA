@@ -44,7 +44,7 @@ def parse_float(args, name):
 
 # ── Endpoint 1: /channel ──────────────────────────────────────────────────────
 
-@app.route("/channel")
+@app.route("/api/query/channel")
 def channel():
     """
     GET /channel?session=<id>&name=<channel>&at=<unix_ts>
@@ -84,7 +84,7 @@ def channel():
 
 # ── Endpoint 2: /range ────────────────────────────────────────────────────────
 
-@app.route("/range")
+@app.route("/api/query/range")
 def range_query():
     """
     GET /range?session=<id>&name=<channel>&t0=<unix_ts>&t1=<unix_ts>
@@ -141,7 +141,7 @@ def range_query():
 
 # ── Endpoint 3: /events ───────────────────────────────────────────────────────
 
-@app.route("/events")
+@app.route("/api/query/events")
 def events():
     """
     GET /events?session=<id>&t0=<unix_ts>&t1=<unix_ts>[&severity=warning][&limit=20]
@@ -205,7 +205,7 @@ def events():
 
 # ── Endpoint 4: /search ───────────────────────────────────────────────────────
 
-@app.route("/search")
+@app.route("/api/query/search")
 def search():
     """
     GET /search?q=<natural language>&k=<num results>

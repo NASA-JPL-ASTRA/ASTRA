@@ -35,7 +35,8 @@ cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env          # then fill in OPENAI_API_KEY
-uvicorn app.main:app --reload
+# Use the venv’s Python so deps (e.g. influxdb_client) match pip — not a global `uvicorn` on PATH.
+./venv/bin/python -m uvicorn app.main:app --reload
 
 # 2) Frontend (in another terminal)
 cd frontend
