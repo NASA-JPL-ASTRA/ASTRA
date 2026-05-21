@@ -12,14 +12,31 @@ import {
   telemetryStreams as mockTelemetry,
 } from '../mock/data';
 import { DEFAULT_STT_MODEL, isSupportedSttModel } from '../config/sttModels';
+import {
+  loadDualMicConfig,
+  micSpeakersForSources,
+  MIC_1_SOURCE,
+  MIC_2_SOURCE,
+  type MicSourceId,
+} from '../config/audioInputs';
 
 export interface LiveTranscription {
   id: string;
   timestamp: Date;
+  /** When this utterance first had speech (for ordering overlapping mics). */
+  utteranceStartMs: number;
   speakerId: string;
   rawText: string;
   confidence: number;
   isFinal: boolean;
+}
+
+function sortTranscriptions(entries: LiveTranscription[]): LiveTranscription[] {
+  return [...entries].sort((a, b) => {
+    const startDiff = a.utteranceStartMs - b.utteranceStartMs;
+    if (startDiff !== 0) return startDiff;
+    return a.timestamp.getTime() - b.timestamp.getTime();
+  });
 }
 
 export interface SpeakerProfile {
@@ -28,15 +45,40 @@ export interface SpeakerProfile {
   color: string;
 }
 
+const STT_MODEL_STORAGE_KEY = 'astra.sttModel';
+const SPEAKER_PALETTE = [
+  '#00d4ff',
+  '#00e676',
+  '#b388ff',
+  '#ffab00',
+  '#ff5252',
+  '#4dd0e1',
+  '#64ffda',
+  '#f06292',
+];
+const DEFAULT_SINGLE_SPEAKER: SpeakerProfile[] = [
+  { id: 'speaker_0', name: 'Speaker 1', color: SPEAKER_PALETTE[0] },
+];
+
+function loadInitialSpeakers(): SpeakerProfile[] {
+  if (typeof window !== 'undefined' && loadDualMicConfig().enabled) {
+    const cfg = loadDualMicConfig();
+    const sources: MicSourceId[] = [];
+    if (cfg.mic1DeviceId) sources.push(MIC_1_SOURCE);
+    if (cfg.mic2DeviceId) sources.push(MIC_2_SOURCE);
+    if (sources.length === 0) return micSpeakersForSources([MIC_1_SOURCE]);
+    return micSpeakersForSources(sources);
+  }
+  return DEFAULT_SINGLE_SPEAKER;
+}
+
 interface AppState {
-  // Session
   currentSessionId: string | null;
   backendSessionId: string | null;
   sessions: Session[];
   logs: LogEntry[];
   telemetryStreams: TelemetryStream[];
 
-  // Recording & Audio
   isRecording: boolean;
   isPaused: boolean;
   isMuted: boolean;
@@ -45,29 +87,25 @@ interface AppState {
   sessionStartTime: Date | null;
   selectedSttModel: string;
 
-  // WebSocket
   wsConnected: boolean;
 
-  // Live transcriptions from Whisper
   transcriptions: LiveTranscription[];
   speakers: SpeakerProfile[];
   activeSpeakerId: string;
+  /** Mics currently detected as available (1 or 2 in dual-mic mode). */
+  connectedMicCount: number;
 
-  // Live notes from backend (during active session)
   liveNotes: BackendNote[];
 
-  // Log-file telemetry voice queries (during active session)
   voiceTelemetryQueries: VoiceTelemetryQuery[];
   pendingTelemetryQueryId: string | null;
   telemetryScenarios: string[];
   defaultTelemetryScenario: string | null;
 
-  // UI
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   savedSessionToast: string | null;
 
-  // Actions
   setCurrentSession: (id: string | null) => void;
   setBackendSessionId: (id: string | null) => void;
   setIsRecording: (value: boolean) => void;
@@ -86,7 +124,9 @@ interface AppState {
     transcript: string,
     isFinal: boolean,
     speakerId?: string,
+    utteranceStartMs?: number,
   ) => void;
+  setMicSpeakers: (sources: MicSourceId[]) => void;
   setActiveSpeaker: (speakerId: string) => void;
   addSpeaker: () => void;
   updateSpeaker: (
@@ -118,32 +158,13 @@ interface AppState {
   updateSessionTranscription: (sessionId: string, transcriptionId: string, newText: string) => void;
 }
 
-const STT_MODEL_STORAGE_KEY = 'astra.sttModel';
-const SPEAKER_PALETTE = [
-  '#00d4ff',
-  '#00e676',
-  '#b388ff',
-  '#ffab00',
-  '#ff5252',
-  '#4dd0e1',
-  '#64ffda',
-  '#f06292',
-];
-const DEFAULT_SPEAKER_ID = 'speaker_0';
-
-const defaultSpeakers: SpeakerProfile[] = [
-  {
-    id: DEFAULT_SPEAKER_ID,
-    name: 'Speaker 1',
-    color: SPEAKER_PALETTE[0],
-  },
-];
-
 function loadInitialSttModel(): string {
   if (typeof window === 'undefined') return DEFAULT_STT_MODEL;
   const stored = window.localStorage.getItem(STT_MODEL_STORAGE_KEY);
   return stored && isSupportedSttModel(stored) ? stored : DEFAULT_STT_MODEL;
 }
+
+const initialSpeakers = loadInitialSpeakers();
 
 export const useStore = create<AppState>((set, get) => ({
   currentSessionId: 'sess1',
@@ -163,8 +184,9 @@ export const useStore = create<AppState>((set, get) => ({
   wsConnected: false,
 
   transcriptions: [],
-  speakers: defaultSpeakers,
-  activeSpeakerId: DEFAULT_SPEAKER_ID,
+  speakers: initialSpeakers,
+  activeSpeakerId: initialSpeakers[0]?.id ?? 'speaker_0',
+  connectedMicCount: initialSpeakers.length,
   liveNotes: [],
   voiceTelemetryQueries: [],
   pendingTelemetryQueryId: null,
@@ -193,45 +215,65 @@ export const useStore = create<AppState>((set, get) => ({
   addLog: (log) => set((s) => ({ logs: [log, ...s.logs] })),
   setWsConnected: (connected) => set({ wsConnected: connected }),
   addTranscription: (entry) =>
-    set((s) => ({ transcriptions: [...s.transcriptions, entry] })),
+    set((s) => ({
+      transcriptions: sortTranscriptions([
+        ...s.transcriptions,
+        {
+          ...entry,
+          utteranceStartMs: entry.utteranceStartMs ?? entry.timestamp.getTime(),
+        },
+      ]),
+    })),
   updateLiveTranscription: (id, newText) =>
     set((s) => ({
       transcriptions: s.transcriptions.map((t) =>
         t.id === id ? { ...t, rawText: newText } : t
       ),
     })),
-  upsertStreamingTranscription: (id, transcript, isFinal, speakerId) =>
+  upsertStreamingTranscription: (id, transcript, isFinal, speakerId, utteranceStartMs) =>
     set((s) => {
       const exists = s.transcriptions.some((t) => t.id === id);
       const resolvedSpeakerId = speakerId ?? s.activeSpeakerId;
+      const resolvedStartMs = utteranceStartMs ?? Date.now();
       if (exists) {
-        return {
-          transcriptions: s.transcriptions.map((t) =>
-            t.id === id
-              ? {
-                  ...t,
-                  rawText: transcript,
-                  isFinal,
-                  speakerId: speakerId ?? t.speakerId,
-                }
-              : t
-          ),
-        };
+        const next = s.transcriptions.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                rawText: transcript,
+                isFinal,
+                speakerId: speakerId ?? t.speakerId,
+                utteranceStartMs: t.utteranceStartMs || resolvedStartMs,
+              }
+            : t,
+        );
+        return { transcriptions: sortTranscriptions(next) };
       }
-      return {
-        transcriptions: [
-          ...s.transcriptions,
-          {
-            id,
-            timestamp: new Date(),
-            speakerId: resolvedSpeakerId,
-            rawText: transcript,
-            confidence: 0.9,
-            isFinal,
-          },
-        ],
-      };
+      const next = [
+        ...s.transcriptions,
+        {
+          id,
+          timestamp: new Date(),
+          utteranceStartMs: resolvedStartMs,
+          speakerId: resolvedSpeakerId,
+          rawText: transcript,
+          confidence: 0.9,
+          isFinal,
+        },
+      ];
+      return { transcriptions: sortTranscriptions(next) };
     }),
+  setMicSpeakers: (sources) => {
+    const micSpeakers =
+      sources.length > 0 ? micSpeakersForSources(sources) : DEFAULT_SINGLE_SPEAKER;
+    set((s) => ({
+      speakers: micSpeakers,
+      connectedMicCount: micSpeakers.length,
+      activeSpeakerId: micSpeakers.some((sp) => sp.id === s.activeSpeakerId)
+        ? s.activeSpeakerId
+        : micSpeakers[0].id,
+    }));
+  },
   setActiveSpeaker: (speakerId) =>
     set((s) =>
       s.speakers.some((speaker) => speaker.id === speakerId)
@@ -386,23 +428,18 @@ export const useStore = create<AppState>((set, get) => ({
     set({ selectedSttModel: model });
   },
   showSavedToast: (label) => set({ savedSessionToast: label }),
-
   dismissSavedToast: () => set({ savedSessionToast: null }),
-
   deleteSession: (id) =>
     set((s) => ({
       sessions: s.sessions.filter((sess) => sess.id !== id),
     })),
-
   getSessionById: (id) => get().sessions.find((s) => s.id === id),
-
   updateSession: (id, updates) =>
     set((s) => ({
       sessions: s.sessions.map((sess) =>
         sess.id === id ? { ...sess, ...updates } : sess
       ),
     })),
-
   updateSessionTranscription: (sessionId, transcriptionId, newText) =>
     set((s) => ({
       sessions: s.sessions.map((sess) =>

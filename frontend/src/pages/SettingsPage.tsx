@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Mic,
   Brain,
@@ -16,12 +16,24 @@ import {
   MapPin,
   Clock,
   Palette,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
   STT_MODEL_OPTIONS,
   getSttModelLabel,
 } from '../config/sttModels';
+import {
+  ensureAudioInputLabels,
+  loadDualMicConfig,
+  type DualMicConfig,
+} from '../config/audioInputs';
+import {
+  loadGeneralSettings,
+  persistSettingsSnapshot,
+  resetToDefaultSettings,
+} from '../config/settingsStorage';
 
 interface SettingGroup {
   id: string;
@@ -57,9 +69,14 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void 
   );
 }
 
+type SaveStatus = 'idle' | 'saving' | 'saved';
+
 export default function SettingsPage() {
   const [activeGroup, setActiveGroup] = useState('user');
   const { selectedSttModel, setSelectedSttModel } = useStore();
+
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const saveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
 
   // User state
   const [isLoggedIn, setIsLoggedIn] = useState(true);
@@ -67,25 +84,131 @@ export default function SettingsPage() {
   const [userEmail] = useState('sarah.chen@jpl.nasa.gov');
   const [userRole] = useState('Lead Operator');
 
-  // General state
-  const [language, setLanguage] = useState('en');
-  const [region, setRegion] = useState('America/Los_Angeles');
-  const [dateFormat, setDateFormat] = useState('MM/DD/YYYY');
-  const [theme, setTheme] = useState('dark');
-  const [use24Hour, setUse24Hour] = useState(false);
+  // General state (loaded from localStorage on mount)
+  const [language, setLanguage] = useState(() => loadGeneralSettings().language);
+  const [region, setRegion] = useState(() => loadGeneralSettings().region);
+  const [dateFormat, setDateFormat] = useState(() => loadGeneralSettings().dateFormat);
+  const [theme, setTheme] = useState(() => loadGeneralSettings().theme);
+  const [use24Hour, setUse24Hour] = useState(() => loadGeneralSettings().use24Hour);
 
   // Audio state
-  const [autoTranscribe, setAutoTranscribe] = useState(true);
-  const [noiseSuppression, setNoiseSuppression] = useState(true);
-  const [multiSpeaker, setMultiSpeaker] = useState(true);
-  const [voiceCommands, setVoiceCommands] = useState(true);
+  const [autoTranscribe, setAutoTranscribe] = useState(
+    () => loadGeneralSettings().autoTranscribe,
+  );
+  const [noiseSuppression, setNoiseSuppression] = useState(
+    () => loadGeneralSettings().noiseSuppression,
+  );
+  const [dualMic, setDualMic] = useState<DualMicConfig>(() => loadDualMicConfig());
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [voiceCommands, setVoiceCommands] = useState(
+    () => loadGeneralSettings().voiceCommands,
+  );
+
+  const refreshAudioDevices = useCallback(async () => {
+    setDevicesLoading(true);
+    try {
+      const devices = await ensureAudioInputLabels();
+      setAudioInputs(devices);
+    } finally {
+      setDevicesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeGroup === 'audio') {
+      void refreshAudioDevices();
+    }
+  }, [activeGroup, refreshAudioDevices]);
+
+  const updateDualMic = (patch: Partial<DualMicConfig>) => {
+    setDualMic((prev) => ({ ...prev, ...patch }));
+    if (saveStatus === 'saved') setSaveStatus('idle');
+  };
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleSaveChanges = () => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    setSaveStatus('saving');
+
+    setSelectedSttModel(selectedSttModel);
+    persistSettingsSnapshot({
+      dualMic,
+      general: {
+        language,
+        region,
+        dateFormat,
+        theme,
+        use24Hour,
+        autoTranscribe,
+        noiseSuppression,
+        voiceCommands,
+      },
+    });
+
+    window.setTimeout(() => {
+      setSaveStatus('saved');
+      saveTimerRef.current = window.setTimeout(() => {
+        setSaveStatus('idle');
+        saveTimerRef.current = null;
+      }, 3200);
+    }, 280);
+  };
+
+  const handleResetDefaults = () => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const defaults = resetToDefaultSettings();
+    setDualMic(defaults.dualMic);
+    setLanguage(defaults.general.language);
+    setRegion(defaults.general.region);
+    setDateFormat(defaults.general.dateFormat);
+    setTheme(defaults.general.theme);
+    setUse24Hour(defaults.general.use24Hour);
+    setAutoTranscribe(defaults.general.autoTranscribe);
+    setNoiseSuppression(defaults.general.noiseSuppression);
+    setVoiceCommands(defaults.general.voiceCommands);
+    setSaveStatus('saved');
+    saveTimerRef.current = window.setTimeout(() => setSaveStatus('idle'), 3200);
+  };
 
   // AI state
   const [llmModel, setLlmModel] = useState('gpt-4');
   const [ragEnabled, setRagEnabled] = useState(true);
 
+  const isSaving = saveStatus === 'saving';
+  const isSaved = saveStatus === 'saved';
+
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
+    <div className="relative p-6 space-y-6 animate-fade-in">
+      {isSaved && (
+        <div
+          className="fixed top-20 right-6 z-50 animate-slide-up"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-3 px-5 py-3.5 bg-space-panel border border-accent-green/35 rounded-xl shadow-2xl shadow-accent-green/10">
+            <CheckCircle2 className="w-5 h-5 text-accent-green shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-text-primary">Settings saved</p>
+              <p className="text-xs text-text-secondary mt-0.5">
+                Audio devices, STT model, and preferences stored in this browser.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       <div>
         <h1 className="text-2xl font-bold text-text-primary">Settings</h1>
         <p className="text-sm text-text-secondary mt-1">Configure ASTRA system parameters</p>
@@ -376,6 +499,18 @@ export default function SettingsPage() {
                 </p>
               </div>
 
+              <div className="rounded-lg border border-space-border bg-space-card/60 px-4 py-3">
+                <p className="text-xs font-medium text-text-primary">Transcription language</p>
+                <p className="text-xs text-text-muted mt-1 leading-relaxed">
+                  Live STT language is set in <span className="font-mono">backend/.env</span> via{' '}
+                  <span className="font-mono">OPENAI_STT_LANGUAGE=en</span> (restart backend after
+                  changes). Leave <span className="font-mono">OPENAI_STT_PROMPT</span> empty unless
+                  you need domain words (e.g. channel names)—do not put instruction sentences there;
+                  they can appear in the transcript stream. The General → Language dropdown is
+                  UI-only.
+                </p>
+              </div>
+
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-text-primary">Auto-Transcribe</p>
@@ -392,12 +527,72 @@ export default function SettingsPage() {
                 <Toggle enabled={noiseSuppression} onChange={() => setNoiseSuppression(!noiseSuppression)} />
               </div>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-text-primary">Multi-Speaker Detection</p>
-                  <p className="text-xs text-text-muted mt-0.5">Identify and label different speakers in the audio stream</p>
+              <div className="rounded-lg border border-accent-cyan/20 bg-accent-cyan/5 px-4 py-3 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-text-primary">
+                      VoiceMeeter Banana — dual microphone
+                    </p>
+                    <p className="text-xs text-text-muted mt-0.5 leading-relaxed">
+                      Route Input 1 → A1 and Input 2 → B1. Both streams record in parallel
+                      and are labeled Microphone 1 / 2. When both speak at once, entries are
+                      ordered by who started first; interjections appear after.
+                    </p>
+                  </div>
+                  <Toggle
+                    enabled={dualMic.enabled}
+                    onChange={() => updateDualMic({ enabled: !dualMic.enabled })}
+                  />
                 </div>
-                <Toggle enabled={multiSpeaker} onChange={() => setMultiSpeaker(!multiSpeaker)} />
+
+                {dualMic.enabled && (
+                  <>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => void refreshAudioDevices()}
+                        disabled={devicesLoading}
+                        className="text-xs text-accent-cyan hover:underline disabled:opacity-50"
+                      >
+                        {devicesLoading ? 'Scanning…' : 'Rescan input devices'}
+                      </button>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-text-secondary">
+                        Microphone 1 (VoiceMeeter A1 output)
+                      </label>
+                      <select
+                        value={dualMic.mic1DeviceId}
+                        onChange={(e) => updateDualMic({ mic1DeviceId: e.target.value })}
+                        className="mt-1 w-full bg-space-card border border-space-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-cyan/50"
+                      >
+                        <option value="">— Select device —</option>
+                        {audioInputs.map((d) => (
+                          <option key={d.deviceId} value={d.deviceId}>
+                            {d.label || d.deviceId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-text-secondary">
+                        Microphone 2 (VoiceMeeter B1 output)
+                      </label>
+                      <select
+                        value={dualMic.mic2DeviceId}
+                        onChange={(e) => updateDualMic({ mic2DeviceId: e.target.value })}
+                        className="mt-1 w-full bg-space-card border border-space-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-cyan/50"
+                      >
+                        <option value="">— Select device —</option>
+                        {audioInputs.map((d) => (
+                          <option key={d.deviceId} value={d.deviceId}>
+                            {d.label || d.deviceId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center justify-between">
@@ -493,15 +688,53 @@ export default function SettingsPage() {
           )}
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-6 mt-6 border-t border-space-border">
-            <button className="flex items-center gap-2 px-4 py-2 text-text-secondary hover:text-text-primary text-sm transition-colors">
-              <RotateCcw className="w-4 h-4" />
-              Reset to Defaults
-            </button>
-            <button className="flex items-center gap-2 px-4 py-2 bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 rounded-lg text-sm font-medium hover:bg-accent-cyan/25 transition-all">
-              <Save className="w-4 h-4" />
-              Save Changes
-            </button>
+          <div className="flex flex-col items-end gap-3 pt-6 mt-6 border-t border-space-border">
+            {isSaved && (
+              <p className="flex items-center gap-2 text-xs font-medium text-accent-green animate-fade-in">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                All changes saved locally
+              </p>
+            )}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleResetDefaults}
+                disabled={isSaving}
+                className="flex items-center gap-2 px-4 py-2 text-text-secondary hover:text-text-primary text-sm transition-colors disabled:opacity-50"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Reset to Defaults
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveChanges}
+                disabled={isSaving}
+                className={`flex items-center gap-2 min-w-[9.5rem] justify-center px-4 py-2 rounded-lg text-sm font-medium border transition-all duration-300 disabled:opacity-70 ${
+                  isSaved
+                    ? 'bg-accent-green/15 text-accent-green border-accent-green/35 scale-[1.02]'
+                    : isSaving
+                      ? 'bg-accent-cyan/10 text-accent-cyan border-accent-cyan/25'
+                      : 'bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30 hover:bg-accent-cyan/25'
+                }`}
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : isSaved ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    Saved
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    Save Changes
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>

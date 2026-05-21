@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import type { LiveTranscription, SpeakerProfile } from '../../store/useStore';
+import { loadDualMicConfig } from '../../config/audioInputs';
 import { getSttModelLabel } from '../../config/sttModels';
 
 const COLOR_SWATCHES = [
@@ -316,43 +317,58 @@ function useLocalClock() {
 function SpeakerRail({
   speakers,
   activeSpeakerId,
+  connectedMicCount,
   transcriptions,
   onAddSpeaker,
   onActiveSpeakerChange,
   onSpeakerNameChange,
   onSpeakerColorChange,
   onRemoveSpeaker,
+  lockSpeakerList = false,
 }: {
   speakers: SpeakerProfile[];
   activeSpeakerId: string;
+  connectedMicCount: number;
   transcriptions: LiveTranscription[];
   onAddSpeaker: () => void;
   onActiveSpeakerChange: (speakerId: string) => void;
   onSpeakerNameChange: (speakerId: string, name: string) => void;
   onSpeakerColorChange: (speakerId: string, color: string) => void;
   onRemoveSpeaker: (speakerId: string) => void;
+  lockSpeakerList?: boolean;
 }) {
   const usage = useMemo(() => getSpeakerUsage(transcriptions), [transcriptions]);
 
   return (
     <aside className="flex w-full shrink-0 flex-col border-t border-space-border bg-space-dark/30 lg:w-80 lg:border-l lg:border-t-0">
       <div className="flex items-center justify-between border-b border-space-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-accent-cyan" />
-          <h3 className="text-sm font-semibold text-text-primary">Speakers</h3>
-          <span className="rounded-md bg-space-card px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
-            {speakers.length}
-          </span>
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-accent-cyan" />
+            <h3 className="text-sm font-semibold text-text-primary">Speakers</h3>
+            <span className="rounded-md bg-space-card px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+              {speakers.length}
+            </span>
+          </div>
+          {lockSpeakerList && (
+            <p className="text-[10px] text-text-muted pl-6">
+              {connectedMicCount === 1
+                ? '1 microphone connected'
+                : `${connectedMicCount} microphones connected`}
+            </p>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={onAddSpeaker}
-          className="rounded-lg border border-accent-cyan/25 bg-accent-cyan/10 p-1.5 text-accent-cyan transition-colors hover:bg-accent-cyan/20"
-          aria-label="Add speaker"
-          title="Add speaker"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
+        {!lockSpeakerList && (
+          <button
+            type="button"
+            onClick={onAddSpeaker}
+            className="rounded-lg border border-accent-cyan/25 bg-accent-cyan/10 p-1.5 text-accent-cyan transition-colors hover:bg-accent-cyan/20"
+            aria-label="Add speaker"
+            title="Add speaker"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
@@ -411,7 +427,7 @@ function SpeakerRail({
                 <button
                   type="button"
                   onClick={() => onRemoveSpeaker(speaker.id)}
-                  disabled={speakers.length <= 1}
+                  disabled={lockSpeakerList || speakers.length <= 1}
                   className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-30"
                   aria-label="Remove speaker"
                   title="Remove speaker"
@@ -456,6 +472,7 @@ export default function TranscriptionPanel() {
     transcriptions,
     speakers,
     activeSpeakerId,
+    connectedMicCount,
     isRecording,
     isPaused,
     wsConnected,
@@ -513,8 +530,9 @@ export default function TranscriptionPanel() {
       ? Math.max(0, Math.floor((now.getTime() - sessionStartTime.getTime()) / 1000))
       : 0;
 
-  const uniqueSpeakers = new Set(transcriptions.map((t) => t.speakerId)).size || speakers.length;
+  const uniqueSpeakers = connectedMicCount || new Set(transcriptions.map((t) => t.speakerId)).size || speakers.length;
   const isActivelyListening = isRecording && !isPaused;
+  const dualMicEnabled = loadDualMicConfig().enabled;
 
   return (
     <div className="flex flex-col h-full rounded-xl border border-space-border bg-space-panel overflow-hidden">
@@ -665,8 +683,9 @@ export default function TranscriptionPanel() {
         <SpeakerRail
           speakers={speakers}
           activeSpeakerId={activeSpeakerId}
+          connectedMicCount={connectedMicCount}
           transcriptions={transcriptions}
-          onAddSpeaker={addSpeaker}
+          onAddSpeaker={dualMicEnabled ? () => {} : addSpeaker}
           onActiveSpeakerChange={setActiveSpeaker}
           onSpeakerNameChange={(speakerId, name) =>
             updateSpeaker(speakerId, { name })
@@ -675,6 +694,7 @@ export default function TranscriptionPanel() {
             updateSpeaker(speakerId, { color })
           }
           onRemoveSpeaker={removeSpeaker}
+          lockSpeakerList={dualMicEnabled}
         />
       </div>
 

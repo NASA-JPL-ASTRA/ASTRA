@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { useSyncConnectedMics } from '../hooks/useSyncConnectedMics';
 import { useWhisper } from '../hooks/useWhisper';
 
 type RecordingControls = ReturnType<typeof useWhisper>;
@@ -7,6 +8,7 @@ const RecordingContext = createContext<RecordingControls | null>(null);
 
 export function RecordingProvider({ children }: { children: ReactNode }) {
   const recording = useWhisper();
+  useSyncConnectedMics();
 
   return (
     <RecordingContext.Provider value={recording}>

@@ -56,8 +56,9 @@ up automatically without exporting variables in your shell.
 | `OPENAI_API_BASE_URL`        |    | `https://api.openai.com/v1`    | Override for proxy / Azure |
 | `OPENAI_STT_MODEL`           |    | `gpt-4o-mini-transcribe`       | `gpt-4o-mini-transcribe` \| `gpt-4o-transcribe` \| `gpt-4o-transcribe-diarize` |
 | `OPENAI_STT_LANGUAGE`        |    | `en`                           | ISO-639-1; project default English. Set empty in `.env` only if you need auto-detect. |
-| `OPENAI_STT_PROMPT`          |    | —                              | Priming prompt for jargon / names |
+| `OPENAI_STT_PROMPT`          |    | *(empty)*                      | Optional vocabulary hints only (not instructions); empty avoids prompt leaking into streamed text |
 | `OPENAI_STT_TIMEOUT_SECONDS` |    | `120`                          | HTTP timeout for OpenAI calls |
+| `STT_ENGLISH_ONLY_GATE`      |    | `true`                         | If true, non-English transcripts are discarded (not broadcast to UI) |
 
 ## Endpoints (summary)
 

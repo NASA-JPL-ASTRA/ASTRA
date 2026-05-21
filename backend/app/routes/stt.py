@@ -39,7 +39,11 @@ from app.services.openai_stt import (
     SUPPORTED_STT_MODELS,
     OpenAIStreamingTranscriptionService,
 )
-from app.services.transcript_quality import transcript_qualifies_for_notes
+from app.services.transcript_quality import (
+    english_gate_enabled,
+    transcript_is_english,
+    transcript_qualifies_for_notes,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -51,7 +55,9 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _create_auto_note(sid: str, transcript: str) -> Optional[dict]:
+async def _create_auto_note(
+    sid: str, transcript: str, speaker: Optional[str] = None
+) -> Optional[dict]:
     cleaned = transcript.strip()
     if not transcript_qualifies_for_notes(cleaned):
         return None
@@ -62,7 +68,7 @@ async def _create_auto_note(sid: str, transcript: str) -> Optional[dict]:
         "id": note_id,
         "session_id": sid,
         "timestamp": now,
-        "speaker": None,
+        "speaker": speaker,
         "content": cleaned,
         "type": "observation",
         "tags": ["auto-transcription"],
@@ -122,26 +128,39 @@ async def _transcribe_uploaded_audio(
         ):
             if event.type == "transcript.text.delta" and event.delta:
                 transcript += event.delta
-                await broadcast(sid, EVENT_STT_CHUNK_READY, {
-                    "id": task["id"],
-                    "audio_chunk_id": task["audio_chunk_id"],
-                    "delta": event.delta,
-                    "transcript": transcript,
-                    "is_final": False,
-                })
             elif event.type == "transcript.text.done" and event.text:
                 transcript = event.text
 
+        cleaned = transcript.strip() or None
+        if cleaned and english_gate_enabled() and not transcript_is_english(cleaned):
+            logger.info(
+                "Discarding non-English transcript for task %s (not shown in UI)",
+                task["id"],
+            )
+            cleaned = None
+
         task["status"] = "done"
-        task["transcript"] = transcript.strip() or None
+        task["transcript"] = cleaned
         task["error"] = None
         task["updated_at"] = utcnow()
 
+        if cleaned:
+            await broadcast(sid, EVENT_STT_CHUNK_READY, {
+                "id": task["id"],
+                "audio_chunk_id": task["audio_chunk_id"],
+                "delta": cleaned,
+                "transcript": cleaned,
+                "is_final": True,
+                "speaker": task.get("speaker"),
+                "audio_source": task.get("audio_source"),
+                "utterance_start_ms": task.get("utterance_start_ms"),
+            })
+
         await broadcast(sid, EVENT_STT_TASK_DONE, task)
 
-        if task["transcript"]:
-            await _create_auto_note(sid, task["transcript"])
-            await _sync_structure_note_from_transcript(sid, task["transcript"])
+        if cleaned:
+            await _create_auto_note(sid, cleaned, task.get("speaker"))
+            await _sync_structure_note_from_transcript(sid, cleaned)
     except Exception as e:
         logger.exception("OpenAI transcription failed for task %s", task["id"])
         task["status"] = "failed"
@@ -255,6 +274,9 @@ async def upload_audio(
     audio_chunk_id: Optional[str] = Form(None),
     duration_seconds: Optional[float] = Form(None),
     model: Optional[str] = Form(None),
+    speaker: Optional[str] = Form(None),
+    audio_source: Optional[str] = Form(None),
+    utterance_start_ms: Optional[float] = Form(None),
 ):
     """
     Receive an audio file from the frontend, transcribe it with OpenAI,
@@ -283,6 +305,9 @@ async def upload_audio(
         "audio_chunk_id":   chunk_id,
         "duration_seconds": duration_seconds,
         "model":            selected_model,
+        "speaker":          speaker.strip() if speaker else None,
+        "audio_source":     audio_source.strip() if audio_source else None,
+        "utterance_start_ms": utterance_start_ms,
         "status":           "pending",
         "transcript":       None,
         "error":            None,
