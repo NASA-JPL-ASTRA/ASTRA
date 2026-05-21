@@ -165,6 +165,11 @@ export async function uploadAudioChunk(
   chunkId?: string,
   durationSeconds?: number,
   model?: string,
+  options?: {
+    speaker?: string;
+    audioSource?: string;
+    utteranceStartMs?: number;
+  },
 ): Promise<unknown> {
   const form = new FormData();
   form.append('file', wavBlob, `${chunkId ?? 'chunk'}.wav`);
@@ -172,6 +177,10 @@ export async function uploadAudioChunk(
   if (durationSeconds !== undefined)
     form.append('duration_seconds', String(durationSeconds));
   if (model) form.append('model', model);
+  if (options?.speaker) form.append('speaker', options.speaker);
+  if (options?.audioSource) form.append('audio_source', options.audioSource);
+  if (options?.utteranceStartMs !== undefined)
+    form.append('utterance_start_ms', String(Math.round(options.utteranceStartMs)));
 
   const response = await fetch(
     `${API_URL}/sessions/${sessionId}/stt/upload`,

@@ -201,7 +201,7 @@ export default function SessionPage() {
               </div>
             )}
             <span className="font-mono">
-              {getSttModelLabel(selectedSttModel)} &middot; 16kHz mono &middot; 3s chunks
+              {getSttModelLabel(selectedSttModel)} &middot; 16kHz &middot; dual mic (VoiceMeeter)
             </span>
           </div>
         </div>

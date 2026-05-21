@@ -128,7 +128,7 @@ const DEMO_STRUCTURE_NOTE: StructureNoteDocument = {
         id: 'para_demo_1',
         updated_at: '2026-04-27T15:49:00+00:00',
         time_anchor: '2026-04-27T15:49:00+00:00',
-        bullet_markdown: '• 2026-04-27T15:49:00+00:00 完成麥克風與轉寫路徑測試',
+        bullet_markdown: '• 2026-04-27T15:49:00+00:00 Microphone and transcription path test completed',
         source_transcript_excerpt: 'Hi everyone, my name is Ryan...',
       },
       {

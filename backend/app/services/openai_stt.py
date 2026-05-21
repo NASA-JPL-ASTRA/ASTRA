@@ -27,9 +27,14 @@ class OpenAIStreamingTranscriptionService:
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
         self.model = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
-        # Default English: operational voice for this project is English-only.
-        self.language = (os.getenv("OPENAI_STT_LANGUAGE") or "en").strip() or None
-        self.prompt = os.getenv("OPENAI_STT_PROMPT", "").strip() or None
+        # English-only by default (ISO-639-1). Empty env still resolves to "en", not auto-detect.
+        lang = (os.getenv("OPENAI_STT_LANGUAGE") or "en").strip().lower()
+        self.language = lang if lang not in {"", "auto", "detect"} else "en"
+        # Optional vocabulary hint only — must NOT be instructions (they leak into streamed
+        # transcript text). Use OPENAI_STT_LANGUAGE=en for language; prompt for names/jargon
+        # e.g. "EVR, imu.accel_x, motor stall" not "Transcribe in English only."
+        raw_prompt = os.getenv("OPENAI_STT_PROMPT", "").strip()
+        self.prompt = raw_prompt if raw_prompt else None
         self.timeout = float(os.getenv("OPENAI_STT_TIMEOUT_SECONDS", "120"))
 
     def ensure_configured(self) -> None:
