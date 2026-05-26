@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,7 @@ EVENT_FILTER_ALIASES: dict[str, list[str]] = {
     "fault": ["fault", "current_limit", "anomaly", "rejected"],
     "imu": ["imu", "data_anomaly", "selftest"],
     "command error": ["command", "invalid_format", "rejected", "parser"],
+    "parse error": ["invalid_format", "rejected", "fault_set", "parse error"],
 }
 
 
@@ -153,6 +155,7 @@ async def parse_command_intent(
     *,
     transcript: str,
     default_scenario: str,
+    known_events: list[dict[str, str]] | None,
     api_key: str,
     base_url: str,
     intent_model: str,
@@ -187,10 +190,14 @@ async def parse_command_intent(
         "- If user asks for signals like imu.accel_x or motors.motor1_current, set action=query_channel_log.\n"
         "- If user asks 'value of <signal> when <event> happens' or 'at the time of <event>' then set action=query_channel_at_event.\n"
         "- For query_channel_at_event, you MUST set event_filter and signal_names.\n"
+        "- Prefer event_filter values from known_events for the selected scenario. "
+        "If no exact event name fits, use a short phrase that appears in an event message.\n"
         "- Do NOT invent any other action type; if the utterance is not clearly a telemetry query, set action=unknown.\n"
         "- If scenario is not explicit, infer from wording if possible; otherwise keep null.\n"
         "- If asking for all matches, use aggregation=list.\n"
         "- If unknown, set action=unknown.\n\n"
+        f"Known events for default scenario {default_scenario}:\n"
+        f"{json.dumps(known_events or [], ensure_ascii=False)}\n\n"
         f"Transcript:\n{transcript}"
     )
     try:
@@ -221,6 +228,28 @@ def _format_ts(ts: float) -> str:
     return f"{ts:.6f}".rstrip("0").rstrip(".")
 
 
+def get_known_events_for_scenario(scenario: str) -> list[dict[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    events: list[dict[str, str]] = []
+    for event in get_session_events(session_id=scenario, limit=5000):
+        evr_name = str(event.get("evr_name") or "").strip()
+        message = str(event.get("message") or "").strip()
+        if not evr_name and not message:
+            continue
+        key = (evr_name, message)
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(
+            {
+                "evr_name": evr_name,
+                "severity": str(event.get("severity") or "").strip(),
+                "message": message,
+            }
+        )
+    return events
+
+
 def _event_filter_terms(filter_text: str) -> list[str]:
     if not filter_text:
         return []
@@ -229,7 +258,6 @@ def _event_filter_terms(filter_text: str) -> list[str]:
     for key, aliases in EVENT_FILTER_ALIASES.items():
         if key in filter_text:
             terms.update(aliases)
-    terms.update(part for part in re.split(r"[._\s-]+", filter_text) if len(part) >= 4)
     return sorted(terms, key=len, reverse=True)
 
 
@@ -240,6 +268,62 @@ def _event_matches(event: dict[str, Any], filter_text: str) -> bool:
     evr_name = str(event.get("evr_name") or "").lower()
     message = str(event.get("message") or "").lower()
     return any(term in evr_name or term in message for term in terms)
+
+
+def _text_similarity(a: str, b: str) -> float:
+    a = re.sub(r"[^a-z0-9]+", " ", a.lower()).strip()
+    b = re.sub(r"[^a-z0-9]+", " ", b.lower()).strip()
+    if not a or not b:
+        return 0.0
+    ratio = SequenceMatcher(None, a, b).ratio()
+    a_terms = set(a.split())
+    b_terms = set(b.split())
+    overlap = len(a_terms & b_terms) / max(1, min(len(a_terms), len(b_terms)))
+    return max(ratio, overlap)
+
+
+def resolve_event_filter_for_scenario(
+    event_filter: str | None,
+    scenario: str,
+    known_events: list[dict[str, str]] | None = None,
+) -> str | None:
+    raw_filter = (event_filter or "").strip()
+    if not raw_filter:
+        return event_filter
+
+    events = known_events if known_events is not None else get_known_events_for_scenario(scenario)
+    if not events:
+        return event_filter
+
+    raw_lower = raw_filter.lower()
+    for event in events:
+        evr_name = str(event.get("evr_name") or "").strip()
+        message = str(event.get("message") or "").strip()
+        if raw_lower == evr_name.lower():
+            return evr_name
+        if raw_lower and raw_lower in message.lower():
+            return evr_name or raw_filter
+
+    for event in events:
+        if _event_matches(event, raw_lower):
+            evr_name = str(event.get("evr_name") or "").strip()
+            return evr_name or raw_filter
+
+    terms = _event_filter_terms(raw_lower)
+    best_filter = raw_filter
+    best_score = 0.0
+    for event in events:
+        evr_name = str(event.get("evr_name") or "")
+        message = str(event.get("message") or "")
+        candidates = [evr_name, message, f"{evr_name} {message}"]
+        for term in terms or [raw_filter]:
+            for candidate in candidates:
+                score = _text_similarity(term, candidate)
+                if score > best_score:
+                    best_score = score
+                    best_filter = evr_name or message
+
+    return best_filter if best_score >= 0.62 else raw_filter
 
 
 def query_event_log(
@@ -394,6 +478,28 @@ def _merge_near_duplicate_events(
     return merged
 
 
+def _event_label(message: str, fallback_index: int) -> str:
+    y_match = re.search(r"\by\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*m\b", message, re.IGNORECASE)
+    if y_match:
+        return f"y={float(y_match.group(1)):.1f}m"
+    return f"event {fallback_index}"
+
+
+def _channel_display_name(signal: str) -> str:
+    name = signal.split(".")[-1].replace("_", " ")
+    return re.sub(r"\bmotor(\d+)\b", r"Motor \1", name, flags=re.IGNORECASE).capitalize()
+
+
+def _value_unit(signal: str) -> str:
+    if "current" in signal:
+        return " A"
+    if "temperature" in signal:
+        return " C"
+    if "speed" in signal:
+        return " rpm"
+    return ""
+
+
 def query_channel_at_event(
     telemetry_root: Path,
     scenario: str,
@@ -436,12 +542,20 @@ def query_channel_at_event(
             window_sec=DEFAULT_EVENT_MERGE_WINDOW_SEC,
         )
 
+    signal_label = (
+        _channel_display_name(wanted[0])
+        if len(wanted) == 1
+        else ", ".join(_channel_display_name(signal) for signal in wanted)
+    )
+    event_label = event_filter or "matching event"
     lines: list[str] = [
-        f"Influx event/channel join results for {scenario} "
-        f"(event filter='{event_filter}', tolerance={time_tolerance_sec:.3f}s):"
+        f"{signal_label} at {event_label} events in {scenario}:",
+        "",
     ]
     for i, (event_ts_raw, ets, etype, msg) in enumerate(event_ts, start=1):
-        lines.append(f"{i}. Event @ {event_ts_raw} [{etype}]: {msg}")
+        label = _event_label(msg, i)
+        values: list[str] = []
+        details: list[str] = []
         for sig in wanted:
             samples = get_channel_samples(
                 session_id=scenario,
@@ -452,14 +566,29 @@ def query_channel_at_event(
             )
             nearest = _nearest_sample(samples, ets)
             if not nearest:
-                lines.append(f"   - {sig}: not found")
+                values.append("not found" if len(wanted) == 1 else f"{sig}: not found")
                 continue
             sts = float(nearest["timestamp"])
             val = float(nearest["value"])
             dt = abs(sts - ets)
-            lines.append(
-                f"   - {sig}: {val:.4f} (sample @ {_format_ts(sts)}, dt={dt:.3f}s)"
-            )
+            if len(wanted) == 1:
+                values.append(f"{val:.4f}{_value_unit(sig)}")
+            else:
+                values.append(f"{sig}: {val:.4f}{_value_unit(sig)}")
+            details.append(f"{sig} sample {_format_ts(sts)}, dt={dt:.3f}s")
+        lines.append(f"- {label}: " + "; ".join(values))
+        lines.append(f"  Event: {etype} at {_format_ts(ets)}")
+        if details:
+            lines.append("  Detail: " + "; ".join(details))
+
+    lines.extend(
+        [
+            "",
+            f"Matched channel: {', '.join(wanted)}",
+            f"Matched event filter: {event_filter}",
+            f"Tolerance: {time_tolerance_sec:.3f}s",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -536,19 +665,31 @@ async def answer_from_transcript(
     timeout = float(os.getenv("OPENAI_STT_TIMEOUT_SECONDS", "120"))
 
     inferred = infer_scenario_from_transcript(cleaned, scenario_default)
+    known_events = get_known_events_for_scenario(normalize_scenario_folder(inferred, scenario_default))
     intent = await parse_command_intent(
         transcript=cleaned,
         default_scenario=inferred,
+        known_events=known_events,
         api_key=api_key,
         base_url=base_url,
         intent_model=intent_model,
         timeout=timeout,
     )
+    scenario = normalize_scenario_folder(intent.get("scenario"), inferred)
+    if scenario != normalize_scenario_folder(inferred, scenario_default):
+        known_events = get_known_events_for_scenario(scenario)
+    if intent.get("action") in {"query_event_log", "query_channel_at_event"}:
+        resolved_filter = resolve_event_filter_for_scenario(
+            intent.get("event_filter"),
+            scenario,
+            known_events,
+        )
+        if resolved_filter:
+            intent["event_filter"] = resolved_filter
     answer = execute_intent(intent, telemetry_root=root, default_scenario=inferred)
     action = intent.get("action", "unknown")
     is_query = action != "unknown" and answer.strip() != UNKNOWN_QUERY_REPLY.strip()
 
-    scenario = normalize_scenario_folder(intent.get("scenario"), inferred)
     return {
         "transcript": cleaned,
         "action": action,
