@@ -1,5 +1,5 @@
 """
-Voice telemetry queries against raw event.log / channel.log on disk.
+Voice telemetry queries against InfluxDB telemetry.
 
 Ported from realtime_demo.py for use by the ASTRA backend and frontend.
 """
@@ -15,11 +15,18 @@ from typing import Any
 
 import httpx
 
+from app.services.influx_query import (
+    count_channel_samples,
+    get_channel_samples,
+    get_session_events,
+    query_channel_range_default,
+)
+
 logger = logging.getLogger(__name__)
 
 UNKNOWN_QUERY_REPLY = (
     "Could not interpret this as a telemetry query. "
-    "Ask about events in event.log (e.g., terrain bump) or signals in channel.log "
+    "Ask about telemetry events (e.g., terrain bump) or channel signals "
     "(e.g., imu.accel_x, motors.motor1_current)."
 )
 
@@ -38,6 +45,17 @@ SCENARIO_ALIASES: dict[str, list[str]] = {
     "test_4_motor_stall": ["test 4", "test_4", "motor stall", "stall"],
     "test_5_imu_malfunction": ["test 5", "test_5", "imu malfunction", "imu anomaly"],
     "test_6_command_error": ["test 6", "test_6", "command error"],
+}
+
+EVENT_FILTER_ALIASES: dict[str, list[str]] = {
+    "bump": ["bump", "obstacle"],
+    "nav.bump_detected": ["nav.bump_detected", "bump", "obstacle"],
+    "stall": ["stall", "obstacle", "current_limit", "emergency_stop"],
+    "motor stall": ["stall", "obstacle", "current_limit", "emergency_stop"],
+    "current limit": ["current_limit", "current limit", "current exceeded"],
+    "fault": ["fault", "current_limit", "anomaly", "rejected"],
+    "imu": ["imu", "data_anomaly", "selftest"],
+    "command error": ["command", "invalid_format", "rejected", "parser"],
 }
 
 
@@ -66,15 +84,19 @@ def is_voice_telemetry_enabled() -> bool:
 
 def list_log_scenarios(telemetry_root: Path | None = None) -> list[str]:
     root = telemetry_root or get_telemetry_log_root()
+    scenarios = set(SCENARIO_ALIASES.keys())
     if not root.is_dir():
-        return []
-    return sorted(
+        return sorted(scenarios)
+    scenarios.update(
         p.name
         for p in root.iterdir()
-        if p.is_dir() and (
-            (p / "event.log").exists() or (p / "channel.log").exists()
+        if p.is_dir()
+        and (
+            (p / "event.log").exists()
+            or (p / "channel.log").exists()
         )
     )
+    return sorted(scenarios)
 
 
 def normalize_scenario_folder(name: str | None, default: str) -> str:
@@ -158,11 +180,11 @@ async def parse_command_intent(
         "- test_6_command_error\n\n"
         "Rules:\n"
         "- Valid query actions:\n"
-        "  - query_event_log: read event.log\n"
-        "  - query_channel_log: read channel.log\n"
-        "  - query_channel_at_event: find channel signal values at/near the timestamps of matching events\n"
-        "- If user asks for events from event.log, set action=query_event_log.\n"
-        "- If user asks for signals like imu.accel_x or motors.motor1_current from channel.log, set action=query_channel_log.\n"
+        "  - query_event_log: query telemetry events from InfluxDB\n"
+        "  - query_channel_log: query channel values from InfluxDB\n"
+        "  - query_channel_at_event: find channel signal values at/near matching event timestamps\n"
+        "- If user asks for telemetry events, set action=query_event_log.\n"
+        "- If user asks for signals like imu.accel_x or motors.motor1_current, set action=query_channel_log.\n"
         "- If user asks 'value of <signal> when <event> happens' or 'at the time of <event>' then set action=query_channel_at_event.\n"
         "- For query_channel_at_event, you MUST set event_filter and signal_names.\n"
         "- Do NOT invent any other action type; if the utterance is not clearly a telemetry query, set action=unknown.\n"
@@ -195,6 +217,31 @@ async def parse_command_intent(
     }
 
 
+def _format_ts(ts: float) -> str:
+    return f"{ts:.6f}".rstrip("0").rstrip(".")
+
+
+def _event_filter_terms(filter_text: str) -> list[str]:
+    if not filter_text:
+        return []
+    terms = {filter_text}
+    terms.update(EVENT_FILTER_ALIASES.get(filter_text, []))
+    for key, aliases in EVENT_FILTER_ALIASES.items():
+        if key in filter_text:
+            terms.update(aliases)
+    terms.update(part for part in re.split(r"[._\s-]+", filter_text) if len(part) >= 4)
+    return sorted(terms, key=len, reverse=True)
+
+
+def _event_matches(event: dict[str, Any], filter_text: str) -> bool:
+    terms = _event_filter_terms(filter_text)
+    if not terms:
+        return True
+    evr_name = str(event.get("evr_name") or "").lower()
+    message = str(event.get("message") or "").lower()
+    return any(term in evr_name or term in message for term in terms)
+
+
 def query_event_log(
     telemetry_root: Path,
     scenario: str,
@@ -202,38 +249,25 @@ def query_event_log(
     field: str | None,
     aggregation: str,
 ) -> str:
-    import csv
-
-    event_path = telemetry_root / scenario / "event.log"
-    if not event_path.exists():
-        return f"event.log not found for scenario '{scenario}' at: {event_path}"
-
+    del telemetry_root
     wanted_field = (field or "").strip().lower()
     filter_text = (event_filter or "").strip().lower()
     y_pattern = re.compile(r"\by\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*m\b", re.IGNORECASE)
 
     matches: list[tuple[str, str, str]] = []
-    with event_path.open("r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 4:
-                continue
-            ts, event_type, _severity, message = (
-                row[0].strip(),
-                row[1].strip(),
-                row[2].strip(),
-                row[3].strip(),
+    for event in get_session_events(session_id=scenario):
+        if not _event_matches(event, filter_text):
+            continue
+        matches.append(
+            (
+                _format_ts(float(event["timestamp"])),
+                str(event.get("evr_name") or ""),
+                str(event.get("message") or ""),
             )
-            event_type_lower = event_type.lower()
-            message_lower = message.lower()
-            if filter_text and (
-                filter_text not in event_type_lower and filter_text not in message_lower
-            ):
-                continue
-            matches.append((ts, event_type, message))
+        )
 
     if not matches:
-        return f"No matching events found in '{scenario}/event.log'."
+        return f"No matching events found in Influx session '{scenario}'."
 
     if wanted_field == "y" or ("bump" in filter_text and not wanted_field):
         y_vals: list[float] = []
@@ -242,11 +276,13 @@ def query_event_log(
             if m:
                 y_vals.append(float(m.group(1)))
         if not y_vals:
-            return f"Found {len(matches)} events, but no 'y=...m' values were extracted."
-        unique_y = sorted(set(y_vals))
-        if aggregation == "latest":
-            return f"Latest y position for terrain bump in {scenario}: y={unique_y[-1]:.1f}m"
-        return "Terrain bump y positions: " + ", ".join(f"y={v:.1f}m" for v in unique_y)
+            if wanted_field == "y":
+                return f"Found {len(matches)} events, but no 'y=...m' values were extracted."
+        else:
+            unique_y = sorted(set(y_vals))
+            if aggregation == "latest":
+                return f"Latest y position for terrain bump in {scenario}: y={unique_y[-1]:.1f}m"
+            return "Terrain bump y positions: " + ", ".join(f"y={v:.1f}m" for v in unique_y)
 
     if aggregation == "latest":
         ts, etype, msg = matches[-1]
@@ -308,70 +344,54 @@ def query_channel_log(
     signal_names: list[str],
     aggregation: str,
 ) -> str:
-    import csv
-
-    channel_path = telemetry_root / scenario / "channel.log"
-    if not channel_path.exists():
-        return f"channel.log not found for scenario '{scenario}' at: {channel_path}"
-
+    del telemetry_root
     wanted = [s.strip() for s in signal_names if s and s.strip()]
     if not wanted:
-        return "No signal names provided for channel.log query (e.g., imu.accel_x, motors.motor1_current)."
+        return "No signal names provided for channel query (e.g., imu.accel_x, motors.motor1_current)."
 
-    values: dict[str, list[tuple[float, float]]] = {name: [] for name in wanted}
-    with channel_path.open("r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 3:
-                continue
-            ts_raw, signal, val_raw = row[0].strip(), row[1].strip(), row[2].strip()
-            if signal not in values:
-                continue
-            try:
-                ts = float(ts_raw)
-                val = float(val_raw)
-            except ValueError:
-                continue
-            values[signal].append((ts, val))
-
-    lines = [f"channel.log query results for {scenario}:"]
+    lines = [f"Influx channel query results for {scenario}:"]
     for signal in wanted:
-        series = values.get(signal, [])
-        if not series:
+        stats = query_channel_range_default(session_id=scenario, channel=signal)
+        if not stats:
             lines.append(f"- {signal}: not found")
             continue
-        nums = [v for _t, v in series]
         if aggregation == "latest":
-            lines.append(f"- {signal}: latest={nums[-1]:.4f}")
+            lines.append(f"- {signal}: latest={float(stats['last']):.4f}")
         elif aggregation == "min":
-            lines.append(f"- {signal}: min={min(nums):.4f}")
+            lines.append(f"- {signal}: min={float(stats['min']):.4f}")
         elif aggregation == "max":
-            lines.append(f"- {signal}: max={max(nums):.4f}")
+            lines.append(f"- {signal}: max={float(stats['max']):.4f}")
         elif aggregation == "avg":
-            lines.append(f"- {signal}: avg={sum(nums) / len(nums):.4f}")
+            lines.append(f"- {signal}: avg={float(stats['mean']):.4f}")
         else:
-            preview = ", ".join(f"{v:.4f}" for v in nums[:10])
-            suffix = " ..." if len(nums) > 10 else ""
-            lines.append(f"- {signal}: [{preview}{suffix}] (count={len(nums)})")
+            samples = get_channel_samples(session_id=scenario, channel=signal, limit=10)
+            total = count_channel_samples(session_id=scenario, channel=signal)
+            preview = ", ".join(f"{float(item['value']):.4f}" for item in samples)
+            suffix = " ..." if total > len(samples) else ""
+            lines.append(f"- {signal}: [{preview}{suffix}] (count={total})")
     return "\n".join(lines)
 
 
-def _nearest_sample(
-    series: list[tuple[float, float, str]], target_ts: float
-) -> tuple[float, float, str] | None:
-    if not series:
+def _nearest_sample(samples: list[dict[str, Any]], target_ts: float) -> dict[str, Any] | None:
+    if not samples:
         return None
-    lo, hi = 0, len(series) - 1
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if series[mid][0] < target_ts:
-            lo = mid + 1
-        else:
-            hi = mid
-    candidates = [series[lo]]
-    if lo > 0:
-        candidates.append(series[lo - 1])
-    return min(candidates, key=lambda tv: abs(tv[0] - target_ts))
+    return min(samples, key=lambda item: abs(float(item["timestamp"]) - target_ts))
+
+
+def _merge_near_duplicate_events(
+    events: list[tuple[str, float, str, str]],
+    window_sec: float,
+) -> list[tuple[str, float, str, str]]:
+    if not events:
+        return []
+    merged = [events[0]]
+    for event in events[1:]:
+        _last_raw, last_ts, last_type, last_msg = merged[-1]
+        _raw, ts, event_type, msg = event
+        if event_type == last_type and msg == last_msg and (ts - last_ts) <= window_sec:
+            continue
+        merged.append(event)
+    return merged
 
 
 def query_channel_at_event(
@@ -382,15 +402,7 @@ def query_channel_at_event(
     time_tolerance_sec: float = 0.2,
     aggregation: str = "list",
 ) -> str:
-    import csv
-
-    event_path = telemetry_root / scenario / "event.log"
-    channel_path = telemetry_root / scenario / "channel.log"
-    if not event_path.exists():
-        return f"event.log not found for scenario '{scenario}' at: {event_path}"
-    if not channel_path.exists():
-        return f"channel.log not found for scenario '{scenario}' at: {channel_path}"
-
+    del telemetry_root
     filter_text = (event_filter or "").strip().lower()
     if not filter_text:
         return "No event filter provided for event/channel join query."
@@ -400,75 +412,54 @@ def query_channel_at_event(
         return "No signal names provided for event/channel join query."
 
     event_ts: list[tuple[str, float, str, str]] = []
-    with event_path.open("r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 4:
-                continue
-            ts_raw, event_type, _severity, message = (
-                row[0].strip(),
-                row[1].strip(),
-                row[2].strip(),
-                row[3].strip(),
+    for event in get_session_events(session_id=scenario):
+        if not _event_matches(event, filter_text):
+            continue
+        ts = float(event["timestamp"])
+        event_ts.append(
+            (
+                _format_ts(ts),
+                ts,
+                str(event.get("evr_name") or ""),
+                str(event.get("message") or ""),
             )
-            et_l = event_type.lower()
-            msg_l = message.lower()
-            if filter_text and (filter_text not in et_l and filter_text not in msg_l):
-                continue
-            try:
-                ts = float(ts_raw)
-            except ValueError:
-                continue
-            event_ts.append((ts_raw, ts, event_type, message))
+        )
 
     if not event_ts:
-        return f"No matching events found in '{scenario}/event.log' for filter '{event_filter}'."
+        return f"No matching events found in Influx session '{scenario}' for filter '{event_filter}'."
 
     if aggregation == "latest":
         event_ts = [event_ts[-1]]
-
-    series_by_signal: dict[str, list[tuple[float, float, str]]] = {name: [] for name in wanted}
-    with channel_path.open("r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 3:
-                continue
-            ts_raw, signal, val_raw = row[0].strip(), row[1].strip(), row[2].strip()
-            if signal not in series_by_signal:
-                continue
-            try:
-                ts = float(ts_raw)
-                val = float(val_raw)
-            except ValueError:
-                continue
-            series_by_signal[signal].append((ts, val, ts_raw))
-
-    for sig in wanted:
-        series_by_signal[sig].sort(key=lambda tv: tv[0])
+    else:
+        event_ts = _merge_near_duplicate_events(
+            event_ts,
+            window_sec=DEFAULT_EVENT_MERGE_WINDOW_SEC,
+        )
 
     lines: list[str] = [
-        f"event/channel join results for {scenario} "
+        f"Influx event/channel join results for {scenario} "
         f"(event filter='{event_filter}', tolerance={time_tolerance_sec:.3f}s):"
     ]
     for i, (event_ts_raw, ets, etype, msg) in enumerate(event_ts, start=1):
         lines.append(f"{i}. Event @ {event_ts_raw} [{etype}]: {msg}")
         for sig in wanted:
-            series = series_by_signal.get(sig) or []
-            nearest = _nearest_sample(series, ets)
+            samples = get_channel_samples(
+                session_id=scenario,
+                channel=sig,
+                start_time=ets - time_tolerance_sec,
+                end_time=ets + time_tolerance_sec,
+                limit=200,
+            )
+            nearest = _nearest_sample(samples, ets)
             if not nearest:
                 lines.append(f"   - {sig}: not found")
                 continue
-            sts, val, sample_ts_raw = nearest
+            sts = float(nearest["timestamp"])
+            val = float(nearest["value"])
             dt = abs(sts - ets)
-            if dt > time_tolerance_sec:
-                lines.append(
-                    f"   - {sig}: no sample within tolerance "
-                    f"(nearest at {sample_ts_raw}, dt={dt:.3f}s)"
-                )
-            else:
-                lines.append(
-                    f"   - {sig}: {val:.4f} (sample @ {sample_ts_raw}, dt={dt:.3f}s)"
-                )
+            lines.append(
+                f"   - {sig}: {val:.4f} (sample @ {_format_ts(sts)}, dt={dt:.3f}s)"
+            )
 
     return "\n".join(lines)
 
@@ -504,6 +495,7 @@ def execute_intent(
             tol = float(tol_raw) if tol_raw is not None else 0.2
         except (TypeError, ValueError):
             tol = 0.2
+        tol = max(0.2, tol)
         return query_channel_at_event(
             telemetry_root=telemetry_root,
             scenario=scenario,

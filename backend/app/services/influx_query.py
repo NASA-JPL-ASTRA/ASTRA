@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from influxdb_client import InfluxDBClient
 
 _DEFAULT_LOOKBACK = 30 * 24 * 3600
+_DEFAULT_QUERY_START = 0.0
+_DEFAULT_QUERY_END = 4102444800.0  # 2100-01-01T00:00:00Z
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +60,8 @@ def _influx_settings() -> _InfluxSettings:
 
 
 def _ts(unix_seconds: float) -> str:
-    return datetime.fromtimestamp(unix_seconds, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    dt = datetime.fromtimestamp(unix_seconds, tz=timezone.utc)
+    return dt.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _flux_time(unix_seconds: float) -> str:
@@ -75,6 +76,22 @@ def _client() -> InfluxDBClient:
         org=s.org,
         timeout=s.timeout_ms,
     )
+
+
+def _default_query_window() -> tuple[float, float]:
+    raw_start = os.getenv("INFLUX_QUERY_START_SECONDS", str(_DEFAULT_QUERY_START))
+    raw_end = os.getenv("INFLUX_QUERY_END_SECONDS", str(_DEFAULT_QUERY_END))
+    try:
+        start = float(raw_start)
+    except (TypeError, ValueError):
+        start = _DEFAULT_QUERY_START
+    try:
+        end = float(raw_end)
+    except (TypeError, ValueError):
+        end = _DEFAULT_QUERY_END
+    if start >= end:
+        return _DEFAULT_QUERY_START, _DEFAULT_QUERY_END
+    return max(0.0, start), end
 
 
 def get_channel_value(
@@ -195,3 +212,146 @@ def get_recent_events(
                 )
 
     return sorted(events, key=lambda e: e["timestamp"])
+
+
+def get_session_events(
+    session_id: str,
+    start_time: float | None = None,
+    end_time: float | None = None,
+    severity: str = "all",
+    limit: int | None = None,
+) -> list:
+    start_default, end_default = _default_query_window()
+    start_time = start_default if start_time is None else start_time
+    end_time = end_default if end_time is None else end_time
+    if end_time <= start_time:
+        return []
+
+    s = _influx_settings()
+    start = _flux_time(start_time)
+    end = _flux_time(end_time)
+    max_rows = limit
+    if max_rows is None:
+        raw_limit = os.getenv("INFLUX_EVENT_QUERY_LIMIT", "5000")
+        try:
+            max_rows = int(raw_limit)
+        except (TypeError, ValueError):
+            max_rows = 5000
+    max_rows = max(1, min(50_000, int(max_rows)))
+
+    severity_filter = ""
+    if severity != "all":
+        severity_filter = f'|> filter(fn: (r) => r.severity == "{severity}")'
+
+    query = f"""
+    from(bucket: "{s.bucket}")
+      |> range(start: {start}, stop: {end})
+      |> filter(fn: (r) => r._measurement == "telemetry_event")
+      |> filter(fn: (r) => r.session_id == "{session_id}")
+      |> filter(fn: (r) => r._field == "message")
+      {severity_filter}
+      |> limit(n: {max_rows})
+    """
+
+    events: list = []
+    with _client() as client:
+        tables = client.query_api().query(query, org=s.org)
+        for table in tables:
+            for record in table.records:
+                events.append(
+                    {
+                        "timestamp": record.get_time().timestamp(),
+                        "evr_name": record.values.get("evr_name"),
+                        "severity": record.values.get("severity"),
+                        "message": record.get_value(),
+                    }
+                )
+    return sorted(events, key=lambda e: e["timestamp"])
+
+
+def get_channel_samples(
+    session_id: str,
+    channel: str,
+    start_time: float | None = None,
+    end_time: float | None = None,
+    limit: int = 10,
+) -> list:
+    start_default, end_default = _default_query_window()
+    start_time = start_default if start_time is None else start_time
+    end_time = end_default if end_time is None else end_time
+    if end_time <= start_time:
+        return []
+
+    s = _influx_settings()
+    start = _flux_time(start_time)
+    end = _flux_time(end_time)
+    limit = max(1, min(50_000, int(limit)))
+
+    query = f"""
+    from(bucket: "{s.bucket}")
+      |> range(start: {start}, stop: {end})
+      |> filter(fn: (r) => r._measurement == "telemetry_channel")
+      |> filter(fn: (r) => r.session_id == "{session_id}")
+      |> filter(fn: (r) => r.channel == "{channel}")
+      |> limit(n: {limit})
+    """
+
+    samples: list = []
+    with _client() as client:
+        tables = client.query_api().query(query, org=s.org)
+        for table in tables:
+            for record in table.records:
+                samples.append(
+                    {
+                        "timestamp": record.get_time().timestamp(),
+                        "value": record.get_value(),
+                    }
+                )
+    return sorted(samples, key=lambda item: item["timestamp"])
+
+
+def count_channel_samples(
+    session_id: str,
+    channel: str,
+    start_time: float | None = None,
+    end_time: float | None = None,
+) -> int:
+    start_default, end_default = _default_query_window()
+    start_time = start_default if start_time is None else start_time
+    end_time = end_default if end_time is None else end_time
+    if end_time <= start_time:
+        return 0
+
+    s = _influx_settings()
+    start = _flux_time(start_time)
+    end = _flux_time(end_time)
+
+    query = f"""
+    from(bucket: "{s.bucket}")
+      |> range(start: {start}, stop: {end})
+      |> filter(fn: (r) => r._measurement == "telemetry_channel")
+      |> filter(fn: (r) => r.session_id == "{session_id}")
+      |> filter(fn: (r) => r.channel == "{channel}")
+      |> count()
+    """
+
+    total = 0
+    with _client() as client:
+        tables = client.query_api().query(query, org=s.org)
+        for table in tables:
+            for record in table.records:
+                try:
+                    total += int(record.get_value())
+                except (TypeError, ValueError):
+                    continue
+    return total
+
+
+def query_channel_range_default(session_id: str, channel: str) -> dict | None:
+    start, end = _default_query_window()
+    return query_channel_range(
+        session_id=session_id,
+        channel=channel,
+        start_time=start,
+        end_time=end,
+    )

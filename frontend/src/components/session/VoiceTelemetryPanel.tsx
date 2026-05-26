@@ -366,7 +366,7 @@ export default function VoiceTelemetryPanel({
           <div>
             <h2 className="text-sm font-semibold text-text-primary">Telemetry Queries</h2>
             {embedded && (
-              <p className="mt-0.5 text-xs text-text-muted">Search session event and channel logs</p>
+              <p className="mt-0.5 text-xs text-text-muted">Search session events and channel telemetry</p>
             )}
           </div>
         </div>
@@ -382,8 +382,7 @@ export default function VoiceTelemetryPanel({
       >
         <p className="text-[10px] text-text-muted leading-relaxed">
           Queries are answered from{' '}
-          <span className="font-mono text-text-secondary">event.log</span> /{' '}
-          <span className="font-mono text-text-secondary">channel.log</span>
+          <span className="font-mono text-text-secondary">InfluxDB</span>
           {defaultTelemetryScenario ? (
             <>
               {' '}
@@ -394,7 +393,7 @@ export default function VoiceTelemetryPanel({
         </p>
         {telemetryScenarios.length > 0 && (
           <p className="text-[10px] text-text-muted mt-1 font-mono truncate" title={telemetryScenarios.join(', ')}>
-            {telemetryScenarios.length} scenario(s) on disk
+            {telemetryScenarios.length} scenario session(s) available
           </p>
         )}
         {loadError && (
