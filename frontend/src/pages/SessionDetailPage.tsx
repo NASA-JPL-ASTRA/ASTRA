@@ -40,7 +40,12 @@ import {
 } from '../config/summaryModels';
 import { useRecording } from '../contexts/RecordingContext';
 import { useStore } from '../store/useStore';
-import type { BackendNote, StructureNoteDetailParagraph, StructureNoteDocument } from '../types';
+import type {
+  BackendNote,
+  StructureNoteAnomaly,
+  StructureNoteDetailParagraph,
+  StructureNoteDocument,
+} from '../types';
 
 const MAX_PASTED_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -138,7 +143,9 @@ const DEMO_STRUCTURE_NOTE: StructureNoteDocument = {
     status: 'ready',
     generated_at: '2026-04-27T15:53:40+00:00',
     content_markdown:
-      'Dry run completed: microphone capture, transcript grouping, and structure note layout validated.',
+      'This preview session validated the ASTRA voice debrief workflow: live STT, structure note panels, and export.\n\n' +
+      'Operators walked through microphone capture and confirmed that transcripts feed detail segments and anomalies separately.\n\n' +
+      'The run ended with layout and auto-update behavior verified for a short demo recording.',
   },
   anomalies: [
     {
@@ -156,14 +163,16 @@ const DEMO_STRUCTURE_NOTE: StructureNoteDocument = {
         id: 'para_demo_1',
         updated_at: '2026-04-27T15:49:00+00:00',
         time_anchor: '2026-04-27T15:49:00+00:00',
-        bullet_markdown: '• 2026-04-27T15:49:00+00:00 Microphone and transcription path test completed',
+        bullet_markdown:
+          'Team opens the debrief; microphone capture, STT path, and WebSocket structure-note updates are validated against the session timeline.',
         source_transcript_excerpt: 'Hi everyone, my name is Ryan...',
       },
       {
         id: 'para_demo_2',
         updated_at: '2026-04-27T15:52:00+00:00',
         time_anchor: '2026-04-27T15:52:00+00:00',
-        bullet_markdown: '• 2026-04-27T15:52:00+00:00 討論 structured note 與逐字稿分離顯示',
+        bullet_markdown:
+          'Operators align on structured note panels: Test summary stays narrative-only; Detail notes hold topic-level technical context; Anomalies capture flagged issues without duplicating every utterance.',
         source_transcript_excerpt: 'We should summarize action items...',
       },
     ],
@@ -226,6 +235,33 @@ function formatTime(dateStr: string): string {
   });
 }
 
+function formatAnomalyTimestamp(recordedAt: string): string {
+  const raw = recordedAt.trim();
+  if (!raw) return '';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return formatTime(raw);
+}
+
+function anomalyDisplayTitle(a: StructureNoteAnomaly): string {
+  return (a.title || '').trim() || (a.description || '').trim() || 'Issue';
+}
+
+function anomalyDisplayDescription(a: StructureNoteAnomaly): string {
+  const title = (a.title || '').trim();
+  const desc = (a.description || '').trim();
+  if (desc && desc !== title) return desc;
+  return '';
+}
+
+/** Plain text for export (timestamp shown separately). */
+function anomalyCondensedLine(a: StructureNoteAnomaly): string {
+  const title = anomalyDisplayTitle(a);
+  const desc = anomalyDisplayDescription(a);
+  if (desc) return `${title} — ${desc}`;
+  return title;
+}
+
 /** Backend may still emit a duplicate heading; the page already shows "Test summary". */
 function stripDuplicateSummaryHeading(markdown: string): string {
   return markdown.replace(/^\s*#{1,6}\s*test\s*summary\s*(\([^)]*\))?\s*\n+/i, '').trimStart();
@@ -235,33 +271,38 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function detailNoteTimestamp(p: Pick<StructureNoteDetailParagraph, 'time_anchor' | 'updated_at'>): string {
-  return (p.time_anchor || p.updated_at || '').trim();
+function formatDetailSegmentTime(
+  p: Pick<StructureNoteDetailParagraph, 'time_anchor' | 'updated_at'>,
+): string {
+  const raw = (p.time_anchor || p.updated_at || '').trim();
+  if (!raw) return '';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return formatTime(raw);
 }
 
-/**
- * Single body line for UI: prefer raw excerpt; otherwise strip "• {ISO} —" from bullet_markdown.
- */
+/** LLM-condensed segment summary (never prefer raw transcript excerpt for display). */
 function detailNoteBodyText(p: StructureNoteDetailParagraph): string {
-  const excerpt = (p.source_transcript_excerpt || '').trim();
-  if (excerpt) return excerpt;
   const anchor = (p.time_anchor || '').trim();
-  const bullet = (p.bullet_markdown || '').trim();
+  let bullet = (p.bullet_markdown || '').trim();
+  bullet = bullet.replace(/^\s*[•*-]\s*/, '');
   if (anchor && bullet) {
     const prefixRe = new RegExp(
-      `^\\s*[•\\-*]\\s*${escapeRegExp(anchor)}\\s*(?:[—:]\\s*|\\s+-\\s+)?`,
+      `^\\s*${escapeRegExp(anchor)}\\s*(?:[—:\\-]\\s*|\\s+-\\s+)?`,
       'u',
     );
-    const stripped = bullet.replace(prefixRe, '').trim();
-    if (stripped) return stripped;
+    bullet = bullet.replace(prefixRe, '').trim();
   }
-  return bullet
-    .replace(/^\s*[•*-]\s*/, '')
+  bullet = bullet
     .replace(
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\s*(?:[—:]\s*)?/i,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s*(?:[—:\-]\s*)?/i,
       '',
     )
     .trim();
+  if (bullet) return bullet;
+  const excerpt = (p.source_transcript_excerpt || '').trim();
+  if (!excerpt) return '';
+  return excerpt.length > 320 ? `${excerpt.slice(0, 317)}…` : excerpt;
 }
 
 const STRUCTURE_MD_BODY_CLASS =
@@ -322,7 +363,10 @@ function buildStructuredNoteMarkdown(
     '## 2. Anomalies',
     sn.anomalies.length
       ? sn.anomalies
-          .map((a) => `- **${a.title || 'Issue'}** (${a.recorded_at}): ${a.description}`)
+          .map(
+            (a) =>
+              `- [${formatAnomalyTimestamp(a.recorded_at) || a.recorded_at}] ${anomalyCondensedLine(a)}`,
+          )
           .join('\n')
       : 'No anomaly entries.',
     '',
@@ -330,11 +374,11 @@ function buildStructuredNoteMarkdown(
     sn.detail_notes.paragraphs.length
       ? sn.detail_notes.paragraphs
           .map((p) => {
-            const ts = detailNoteTimestamp(p);
+            const ts = formatDetailSegmentTime(p) || p.time_anchor || '';
             const body = detailNoteBodyText(p) || '(empty)';
-            return `### ${ts}\n\n${body}`;
+            return `- [${ts}] ${body}`;
           })
-          .join('\n\n')
+          .join('\n')
       : 'No detail notes.',
     '',
     '## Transcript',
@@ -365,24 +409,28 @@ async function buildStructuredNoteHtml(
 ): Promise<string> {
   const summaryHtml = await renderMarkdownForExport(sn.test_summary.content_markdown || '(empty)');
   const anomaliesHtml = sn.anomalies.length
-    ? `<ol>${sn.anomalies
+    ? `<ul>${sn.anomalies
         .map(
           (a) =>
-            `<li><strong>${escapeHtml(a.title || 'Issue')}</strong> <span class="muted">${escapeHtml(
-              a.recorded_at,
-            )}</span><p>${escapeHtml(a.description || '')}</p></li>`,
+            `<li><span class="muted">${escapeHtml(
+              formatAnomalyTimestamp(a.recorded_at) || a.recorded_at,
+            )}</span> <strong>${escapeHtml(anomalyDisplayTitle(a))}</strong>${
+              anomalyDisplayDescription(a)
+                ? ` <span class="muted">— ${escapeHtml(anomalyDisplayDescription(a))}</span>`
+                : ''
+            }</li>`,
         )
-        .join('')}</ol>`
+        .join('')}</ul>`
     : '<p class="muted">No anomaly entries.</p>';
   const detailsHtml = sn.detail_notes.paragraphs.length
-    ? sn.detail_notes.paragraphs
+    ? `<ul>${sn.detail_notes.paragraphs
         .map(
           (p) =>
-            `<article><h3>${escapeHtml(detailNoteTimestamp(p))}</h3><p>${escapeHtml(
-              detailNoteBodyText(p) || '(empty)',
-            )}</p></article>`,
+            `<li><span class="muted">${escapeHtml(
+              formatDetailSegmentTime(p) || p.time_anchor || '',
+            )}</span> ${escapeHtml(detailNoteBodyText(p) || '(empty)')}</li>`,
         )
-        .join('')
+        .join('')}</ul>`
     : '<p class="muted">No detail notes.</p>';
   const transcriptHtml = transcriptBlocks.length
     ? transcriptBlocks
@@ -1395,26 +1443,28 @@ export default function SessionDetailPage() {
               {!structureNote || structureNote.anomalies.length === 0 ? (
                 <p className="text-sm text-text-muted">No anomaly entries yet.</p>
               ) : (
-                <ol className="ml-5 list-decimal space-y-4 pl-1 text-[15px] leading-snug text-text-secondary marker:font-medium marker:text-text-primary">
+                <ul className="ml-5 list-disc space-y-2 pl-1 text-sm leading-snug">
                   {structureNote.anomalies.map((a) => {
-                    const desc = (a.description || '').trim();
-                    const title = (a.title || '').trim();
-                    const showSecondLine = desc.length > 0 && desc !== title;
+                    const desc = anomalyDisplayDescription(a);
                     return (
                       <li key={a.id} className="pl-1">
-                        <div className="text-text-primary">
-                          <span className="font-medium">{title || 'Issue'}</span>
-                          <span className="text-text-muted">, time: {a.recorded_at}</span>
-                        </div>
-                        {showSecondLine ? (
-                          <div className="mt-1 whitespace-pre-wrap text-sm text-text-secondary">
-                            {desc}
-                          </div>
+                        <span className="font-mono text-text-muted">
+                          {formatAnomalyTimestamp(a.recorded_at) || a.recorded_at}
+                        </span>
+                        <span className="text-text-muted"> — </span>
+                        <span className="font-medium text-text-primary">
+                          {anomalyDisplayTitle(a)}
+                        </span>
+                        {desc ? (
+                          <>
+                            <span className="text-text-muted"> — </span>
+                            <span className="font-normal text-text-muted">{desc}</span>
+                          </>
                         ) : null}
                       </li>
                     );
                   })}
-                </ol>
+                </ul>
               )}
             </div>
 
@@ -1422,21 +1472,20 @@ export default function SessionDetailPage() {
               <h2 className="mb-2 text-sm font-semibold text-text-primary">3. Detail notes</h2>
               {!structureNote || structureNote.detail_notes.paragraphs.length === 0 ? (
                 <p className="text-sm text-text-muted">
-                  No paragraphs yet — they accumulate when STT chunks are processed.
+                  No topics yet — detail notes list one entry per session theme (not every utterance).
                 </p>
               ) : (
-                <ul className="space-y-4 text-[15px] leading-7 text-text-secondary">
+                <ul className="ml-5 list-disc space-y-3 pl-1 text-sm leading-relaxed text-text-primary">
                   {structureNote.detail_notes.paragraphs.map((p) => (
-                    <li key={p.id} className="rounded-lg border border-space-border/50 bg-space-card/20 px-3 py-2">
+                    <li key={p.id} className="pl-1">
                       <time
-                        className="mb-1.5 block text-xs tabular-nums tracking-tight text-text-muted"
+                        className="font-mono text-text-muted tabular-nums"
                         dateTime={p.time_anchor || undefined}
                       >
-                        {detailNoteTimestamp(p)}
+                        {formatDetailSegmentTime(p) || p.time_anchor}
                       </time>
-                      <div className="whitespace-pre-wrap text-[15px] leading-7 text-text-primary">
-                        {detailNoteBodyText(p)}
-                      </div>
+                      <span className="text-text-muted"> </span>
+                      <span>{detailNoteBodyText(p)}</span>
                     </li>
                   ))}
                 </ul>

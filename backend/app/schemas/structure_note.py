@@ -88,6 +88,14 @@ class VoiceChunkRequest(BaseModel):
         default=False,
         description="True when user asked to log an issue / anomaly (e.g. 幫我記下來).",
     )
+    utterance_start_ms: Optional[float] = Field(
+        None,
+        description="Ms from session start when this chunk began (for detail segment time_anchor).",
+    )
+    chunk_time_anchor: Optional[str] = Field(
+        None,
+        description="Optional ISO 8601 segment start; overrides utterance_start_ms when set.",
+    )
 
 
 class TestSummaryUpdateRequest(BaseModel):
