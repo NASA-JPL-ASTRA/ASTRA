@@ -34,6 +34,11 @@ import {
   persistSettingsSnapshot,
   resetToDefaultSettings,
 } from '../config/settingsStorage';
+import {
+  applyThemePreference,
+  notifyThemeChanged,
+  type ThemePreference,
+} from '../config/theme';
 
 interface SettingGroup {
   id: string;
@@ -88,7 +93,7 @@ export default function SettingsPage() {
   const [language, setLanguage] = useState(() => loadGeneralSettings().language);
   const [region, setRegion] = useState(() => loadGeneralSettings().region);
   const [dateFormat, setDateFormat] = useState(() => loadGeneralSettings().dateFormat);
-  const [theme, setTheme] = useState(() => loadGeneralSettings().theme);
+  const [theme, setTheme] = useState<ThemePreference>(() => loadGeneralSettings().theme);
   const [use24Hour, setUse24Hour] = useState(() => loadGeneralSettings().use24Hour);
 
   // Audio state
@@ -154,6 +159,8 @@ export default function SettingsPage() {
         voiceCommands,
       },
     });
+    applyThemePreference(theme);
+    notifyThemeChanged();
 
     window.setTimeout(() => {
       setSaveStatus('saved');
@@ -179,6 +186,8 @@ export default function SettingsPage() {
     setAutoTranscribe(defaults.general.autoTranscribe);
     setNoiseSuppression(defaults.general.noiseSuppression);
     setVoiceCommands(defaults.general.voiceCommands);
+    applyThemePreference(defaults.general.theme);
+    notifyThemeChanged();
     setSaveStatus('saved');
     saveTimerRef.current = window.setTimeout(() => setSaveStatus('idle'), 3200);
   };
@@ -449,12 +458,16 @@ export default function SettingsPage() {
                 </div>
                 <select
                   value={theme}
-                  onChange={(e) => setTheme(e.target.value)}
+                  onChange={(e) => {
+                    const nextTheme = e.target.value as ThemePreference;
+                    setTheme(nextTheme);
+                    applyThemePreference(nextTheme);
+                  }}
                   className="bg-space-card border border-space-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-cyan/50"
                 >
                   <option value="dark">Dark (Space Control)</option>
                   <option value="light">Light</option>
-                  <option value="system">System Default</option>
+                  <option value="system">Follow Computer Sunrise/Sunset</option>
                 </select>
               </div>
             </div>

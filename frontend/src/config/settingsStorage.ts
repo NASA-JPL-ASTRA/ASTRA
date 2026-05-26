@@ -7,7 +7,7 @@ export interface GeneralSettings {
   language: string;
   region: string;
   dateFormat: string;
-  theme: string;
+  theme: 'dark' | 'light' | 'system';
   use24Hour: boolean;
   autoTranscribe: boolean;
   noiseSuppression: boolean;
@@ -30,7 +30,11 @@ export function loadGeneralSettings(): GeneralSettings {
   try {
     const raw = window.localStorage.getItem(GENERAL_SETTINGS_KEY);
     if (!raw) return { ...defaultGeneral };
-    return { ...defaultGeneral, ...JSON.parse(raw) };
+    const parsed = { ...defaultGeneral, ...JSON.parse(raw) };
+    if (parsed.theme !== 'dark' && parsed.theme !== 'light' && parsed.theme !== 'system') {
+      parsed.theme = defaultGeneral.theme;
+    }
+    return parsed;
   } catch {
     return { ...defaultGeneral };
   }

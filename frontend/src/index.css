@@ -22,6 +22,39 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-nasa-blue: #1f4f78;
+  --color-nasa-light-blue: #3e7fa6;
+  --color-space-black: #e5e8ec;
+  --color-space-dark: #dce2e8;
+  --color-space-panel: #f1f3f5;
+  --color-space-card: #e7ebef;
+  --color-space-border: #c4ccd5;
+  --color-space-hover: #d7dde4;
+  --color-accent-cyan: #2d728f;
+  --color-accent-green: #46745c;
+  --color-accent-amber: #8c6a2d;
+  --color-accent-red: #a95650;
+  --color-accent-purple: #7165a8;
+  --color-text-primary: #222b35;
+  --color-text-secondary: #58636f;
+  --color-text-muted: #7d8791;
+}
+
+:root[data-theme='light'] body {
+  background: var(--color-space-black);
+}
+
+:root[data-theme='light'] aside.fixed,
+:root[data-theme='light'] header {
+  box-shadow: none;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-space-border) transparent;
@@ -93,4 +126,8 @@ body {
   background: rgba(19, 29, 42, 0.8);
   backdrop-filter: blur(12px);
   border: 1px solid var(--color-space-border);
+}
+
+:root[data-theme='light'] .glass-panel {
+  background: rgba(241, 243, 245, 0.88);
 }
