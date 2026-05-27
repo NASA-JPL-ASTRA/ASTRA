@@ -1,28 +1,13 @@
-import type { DualMicConfig } from './audioInputs';
-import { loadDualMicConfig, notifyAudioSettingsChanged, saveDualMicConfig } from './audioInputs';
+import type { ThemePreference } from './theme';
 
 const GENERAL_SETTINGS_KEY = 'astra.settings.general';
 
 export interface GeneralSettings {
-  language: string;
-  region: string;
-  dateFormat: string;
-  theme: 'dark' | 'light' | 'system';
-  use24Hour: boolean;
-  autoTranscribe: boolean;
-  noiseSuppression: boolean;
-  voiceCommands: boolean;
+  theme: ThemePreference;
 }
 
 const defaultGeneral: GeneralSettings = {
-  language: 'en',
-  region: 'America/Los_Angeles',
-  dateFormat: 'MM/DD/YYYY',
   theme: 'dark',
-  use24Hour: false,
-  autoTranscribe: true,
-  noiseSuppression: true,
-  voiceCommands: true,
 };
 
 export function loadGeneralSettings(): GeneralSettings {
@@ -34,7 +19,7 @@ export function loadGeneralSettings(): GeneralSettings {
     if (parsed.theme !== 'dark' && parsed.theme !== 'light' && parsed.theme !== 'system') {
       parsed.theme = defaultGeneral.theme;
     }
-    return parsed;
+    return { theme: parsed.theme };
   } catch {
     return { ...defaultGeneral };
   }
@@ -43,35 +28,4 @@ export function loadGeneralSettings(): GeneralSettings {
 export function saveGeneralSettings(settings: GeneralSettings): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(GENERAL_SETTINGS_KEY, JSON.stringify(settings));
-}
-
-export interface PersistedSettingsSnapshot {
-  dualMic: DualMicConfig;
-  general: GeneralSettings;
-}
-
-export function persistSettingsSnapshot(snapshot: PersistedSettingsSnapshot): void {
-  saveDualMicConfig(snapshot.dualMic);
-  saveGeneralSettings(snapshot.general);
-  notifyAudioSettingsChanged();
-}
-
-export function loadSettingsSnapshot(): PersistedSettingsSnapshot {
-  return {
-    dualMic: loadDualMicConfig(),
-    general: loadGeneralSettings(),
-  };
-}
-
-export const defaultDualMicConfig = (): DualMicConfig => loadDualMicConfig();
-
-export function resetToDefaultSettings(): PersistedSettingsSnapshot {
-  const dualMic: DualMicConfig = {
-    enabled: true,
-    mic1DeviceId: '',
-    mic2DeviceId: '',
-  };
-  const general = { ...defaultGeneral };
-  persistSettingsSnapshot({ dualMic, general });
-  return { dualMic, general };
 }
