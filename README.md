@@ -69,6 +69,7 @@ ATSRA/
 | Backend setup    | `backend/README.md`  | `backend/README.zh.md` |
 | Frontend setup   | `frontend/README.md` | `frontend/README.zh.md` |
 | API contract (REST + WS) | `backend/docs/api-contract.md` | `backend/docs/api-contract.zh.md` |
+| InfluxDB telemetry setup | `telemetry/INFLUX_SETUP.md` | — |
 
 ## Secrets & Environment
 
@@ -78,5 +79,4 @@ Two env files are needed locally (both are git-ignored):
 - `frontend/.env.local` — copy from `frontend/.env.example`
 
 Never commit real keys. See `backend/README.md` for the supported variables.
-
 

@@ -1,4 +1,26 @@
 services:
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_INIT_USERNAME:-astra}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_INIT_PASSWORD:-astra-dev-password}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-aistra-org}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-telemetry}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-aistra-dev-token-12345}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "influx", "ping", "--host", "http://127.0.0.1:8086"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   backend:
     build:
       context: ./backend
@@ -8,6 +30,13 @@ services:
       - ./backend/.env
     environment:
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-}
+      INFLUX_URL: ${BACKEND_INFLUX_URL:-http://influxdb:8086}
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-aistra-dev-token-12345}
+      INFLUX_ORG: ${INFLUX_ORG:-aistra-org}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-telemetry}
+    depends_on:
+      influxdb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
@@ -15,3 +44,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+volumes:
+  influxdb_data:
+  influxdb_config:
