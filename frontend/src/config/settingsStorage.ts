@@ -7,7 +7,7 @@ export interface GeneralSettings {
 }
 
 const defaultGeneral: GeneralSettings = {
-  theme: 'dark',
+  theme: 'system',
 };
 
 export function loadGeneralSettings(): GeneralSettings {
