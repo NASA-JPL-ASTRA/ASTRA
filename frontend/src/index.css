@@ -28,31 +28,41 @@
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --color-nasa-blue: #1f4f78;
-  --color-nasa-light-blue: #3e7fa6;
-  --color-space-black: #e5e8ec;
-  --color-space-dark: #dce2e8;
-  --color-space-panel: #f1f3f5;
-  --color-space-card: #e7ebef;
-  --color-space-border: #c4ccd5;
-  --color-space-hover: #d7dde4;
-  --color-accent-cyan: #2d728f;
-  --color-accent-green: #46745c;
-  --color-accent-amber: #8c6a2d;
-  --color-accent-red: #a95650;
-  --color-accent-purple: #7165a8;
-  --color-text-primary: #222b35;
-  --color-text-secondary: #58636f;
-  --color-text-muted: #7d8791;
+  --color-nasa-blue: #1f6feb;
+  --color-nasa-light-blue: #5ac8fa;
+  --color-space-black: #f6f7f9;
+  --color-space-dark: #fbfbfc;
+  --color-space-panel: #ffffff;
+  --color-space-card: #f1f4f8;
+  --color-space-border: #dddfe5;
+  --color-space-hover: #eaf0f7;
+  --color-accent-cyan: #0b6bcb;
+  --color-accent-green: #248a3d;
+  --color-accent-amber: #c56a00;
+  --color-accent-red: #d93832;
+  --color-accent-purple: #8f5bd6;
+  --color-text-primary: #1c1c1e;
+  --color-text-secondary: #545861;
+  --color-text-muted: #8b9099;
 }
 
 :root[data-theme='light'] body {
-  background: var(--color-space-black);
+  background:
+    radial-gradient(circle at top left, rgba(31, 111, 235, 0.07), transparent 34rem),
+    radial-gradient(circle at bottom right, rgba(90, 200, 250, 0.08), transparent 30rem),
+    linear-gradient(180deg, #ffffff 0%, var(--color-space-black) 56%, #f0f2f5 100%);
 }
 
-:root[data-theme='light'] aside.fixed,
 :root[data-theme='light'] header {
-  box-shadow: none;
+  background: rgba(252, 252, 253, 0.82);
+  border-color: rgba(60, 60, 67, 0.12);
+  box-shadow: 0 1px 0 rgba(60, 60, 67, 0.06);
+}
+
+:root[data-theme='light'] aside.fixed {
+  background: rgba(248, 249, 251, 0.86);
+  border-color: rgba(60, 60, 67, 0.12);
+  box-shadow: 1px 0 0 rgba(60, 60, 67, 0.06);
 }
 
 * {
@@ -129,5 +139,6 @@ body {
 }
 
 :root[data-theme='light'] .glass-panel {
-  background: rgba(241, 243, 245, 0.88);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 18px 42px rgba(25, 31, 38, 0.055);
 }
