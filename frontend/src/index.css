@@ -22,6 +22,53 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-nasa-blue: #173f73;
+  --color-nasa-light-blue: #2f7fbd;
+  --color-space-black: #edf4fb;
+  --color-space-dark: #f4f8fc;
+  --color-space-panel: #fbfdff;
+  --color-space-card: #f2f7fc;
+  --color-space-border: #d2deea;
+  --color-space-hover: #e5f0fa;
+  --color-accent-cyan: #0a78ad;
+  --color-accent-green: #13865e;
+  --color-accent-amber: #b66300;
+  --color-accent-red: #c4473f;
+  --color-accent-purple: #7658c9;
+  --color-text-primary: #132238;
+  --color-text-secondary: #4d6074;
+  --color-text-muted: #7a90a6;
+}
+
+:root[data-theme='light'] body {
+  background:
+    linear-gradient(180deg, #f6faff 0%, var(--color-space-black) 48%, #e7eff8 100%);
+}
+
+:root[data-theme='light'] header {
+  background: rgba(251, 253, 255, 0.9);
+  box-shadow: 0 1px 0 rgba(96, 121, 145, 0.14), 0 16px 36px rgba(38, 73, 107, 0.06);
+}
+
+:root[data-theme='light'] aside.fixed {
+  --color-space-dark: #071a2f;
+  --color-space-card: #0f2844;
+  --color-space-border: #1b3d5f;
+  --color-space-hover: #173a5d;
+  --color-accent-cyan: #49c6ee;
+  --color-accent-green: #43d790;
+  --color-text-primary: #f4f9ff;
+  --color-text-secondary: #bdd0df;
+  --color-text-muted: #7792ac;
+  box-shadow: 14px 0 40px rgba(7, 26, 47, 0.16);
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-space-border) transparent;
@@ -93,4 +140,9 @@ body {
   background: rgba(19, 29, 42, 0.8);
   backdrop-filter: blur(12px);
   border: 1px solid var(--color-space-border);
+}
+
+:root[data-theme='light'] .glass-panel {
+  background: rgba(251, 253, 255, 0.84);
+  box-shadow: 0 20px 52px rgba(31, 63, 94, 0.09);
 }

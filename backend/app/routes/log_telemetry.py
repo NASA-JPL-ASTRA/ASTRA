@@ -1,5 +1,5 @@
 """
-Log-file voice telemetry API (event.log / channel.log on disk).
+Voice telemetry API backed by InfluxDB telemetry.
 
 Endpoints:
 - GET  /api/sessions/telemetry/log-scenarios

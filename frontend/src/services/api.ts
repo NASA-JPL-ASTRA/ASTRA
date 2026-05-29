@@ -418,7 +418,7 @@ export function searchTelemetryChannels(
   return fetchTelemetryQuery<ChannelSearchHit[]>(`/query/search?${params}`);
 }
 
-// ── Log-file voice telemetry (event.log / channel.log) ──
+// ── Voice telemetry queries (Influx-backed) ──
 
 export function getLogTelemetryScenarios(): Promise<LogTelemetryScenariosInfo> {
   return request<LogTelemetryScenariosInfo>('/sessions/telemetry/log-scenarios', {

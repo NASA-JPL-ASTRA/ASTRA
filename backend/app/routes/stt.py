@@ -81,30 +81,29 @@ async def _create_auto_note(
     return new_note
 
 
-async def _sync_structure_note_from_transcript(sid: str, transcript: str) -> None:
+async def _sync_structure_note_from_transcript(
+    sid: str,
+    transcript: str,
+    *,
+    utterance_start_ms: Optional[float] = None,
+) -> None:
     """
     Merge transcript into the session structure note (detail + optional anomaly).
-    Heuristic: common Chinese/English phrases imply user asked to log an issue.
+    request_anomaly_capture is only for explicit log/remember commands; semantic issue
+    detection is handled inside apply_voice_chunk (LLM when configured).
     """
     from app.schemas.structure_note import document_to_storage_dict
-    from app.services.structure_note_engine import apply_voice_chunk
+    from app.services.structure_note_engine import apply_voice_chunk, explicit_log_request
 
     text = transcript.strip()
     if not transcript_qualifies_for_notes(text):
         return
-    tl = text.lower()
-    request_anomaly = any(m in text for m in ("記下來", "幫我記", "問題", "異常")) or any(
-        m in tl
-        for m in (
-            "please log",
-            "log this for me",
-            "log this",
-            "remember this",
-            "anomaly",
-            "knocking",
-        )
+    doc = apply_voice_chunk(
+        sid,
+        text,
+        request_anomaly_capture=explicit_log_request(text),
+        utterance_start_ms=utterance_start_ms,
     )
-    doc = apply_voice_chunk(sid, text, request_anomaly_capture=request_anomaly)
     await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, document_to_storage_dict(doc))
 
 
@@ -160,7 +159,11 @@ async def _transcribe_uploaded_audio(
 
         if cleaned:
             await _create_auto_note(sid, cleaned, task.get("speaker"))
-            await _sync_structure_note_from_transcript(sid, cleaned)
+            await _sync_structure_note_from_transcript(
+                sid,
+                cleaned,
+                utterance_start_ms=task.get("utterance_start_ms"),
+            )
     except Exception as e:
         logger.exception("OpenAI transcription failed for task %s", task["id"])
         task["status"] = "failed"
@@ -255,7 +258,11 @@ async def update_stt_task(sid: str, tid: str, update: STTTaskUpdate):
         await broadcast(sid, EVENT_STT_TASK_DONE, task)
         tx = (update.transcript or "").strip()
         if tx:
-            await _sync_structure_note_from_transcript(sid, tx)
+            await _sync_structure_note_from_transcript(
+                sid,
+                tx,
+                utterance_start_ms=task.get("utterance_start_ms"),
+            )
     elif update.status == "failed":
         error_msg = update.error or "STT transcription failed"
         await broadcast_error(sid, error_msg, source="stt")

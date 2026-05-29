@@ -4,7 +4,6 @@ import type {
   LogEntry,
   TelemetryStream,
   Session,
-  Document,
   VoiceCommand,
   SystemStats,
 } from '../types';
@@ -291,54 +290,6 @@ export const sessions: Session[] = [
     logCount: 31,
     telemetryStreams: 3,
     testbed: 'Comms Lab B',
-  },
-];
-
-export const documents: Document[] = [
-  {
-    id: 'doc1',
-    name: 'Robotic Arm Operations Manual v3.2',
-    type: 'manual',
-    uploadDate: t(10080),
-    size: '12.4 MB',
-    status: 'indexed',
-    pages: 234,
-  },
-  {
-    id: 'doc2',
-    name: 'TP-2024-ARM-003: Joint Calibration Procedure',
-    type: 'procedure',
-    uploadDate: t(4320),
-    size: '2.1 MB',
-    status: 'indexed',
-    pages: 18,
-  },
-  {
-    id: 'doc3',
-    name: 'Mars Rover Testbed Alpha - System Specification',
-    type: 'specification',
-    uploadDate: t(20160),
-    size: '45.8 MB',
-    status: 'indexed',
-    pages: 512,
-  },
-  {
-    id: 'doc4',
-    name: 'IMU Sensor Integration Design Document',
-    type: 'design-doc',
-    uploadDate: t(2880),
-    size: '8.3 MB',
-    status: 'indexed',
-    pages: 87,
-  },
-  {
-    id: 'doc5',
-    name: 'Gripper Subsystem Safety Procedures',
-    type: 'procedure',
-    uploadDate: t(720),
-    size: '1.8 MB',
-    status: 'processing',
-    pages: 12,
   },
 ];
 

@@ -17,12 +17,12 @@ from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 # ── InfluxDB connection config ────────────────────────────────────────────────
-# These match the docker run command above.
-# In production, load these from environment variables or a config file.
-INFLUX_URL    = "http://localhost:8086"
-INFLUX_TOKEN  = "aistra-dev-token-12345"
-INFLUX_ORG    = "aistra-org"
-INFLUX_BUCKET = "telemetry"
+# Defaults match docker-compose.yml and backend/.env.example. Environment variables
+# can override them for a different local InfluxDB.
+INFLUX_URL    = os.getenv("INFLUX_URL", "http://localhost:8086")
+INFLUX_TOKEN  = os.getenv("INFLUX_TOKEN", "aistra-dev-token-12345")
+INFLUX_ORG    = os.getenv("INFLUX_ORG", "aistra-org")
+INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "telemetry")
 
 # ── Measurements (table names in InfluxDB) ────────────────────────────────────
 MEASUREMENT_CHANNEL = "telemetry_channel"

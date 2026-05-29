@@ -44,6 +44,8 @@ async def post_voice_chunk(sid: str, body: VoiceChunkRequest):
         sid,
         body.transcript.strip(),
         request_anomaly_capture=body.request_anomaly_capture,
+        utterance_start_ms=body.utterance_start_ms,
+        chunk_time_anchor=body.chunk_time_anchor,
     )
     await broadcast(sid, EVENT_STRUCTURE_NOTE_UPDATED, document_to_storage_dict(doc))
     return doc

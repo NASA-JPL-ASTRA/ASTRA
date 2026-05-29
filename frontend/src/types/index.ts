@@ -140,16 +140,6 @@ export interface StructureNoteDocument {
   detail_notes: { paragraphs: StructureNoteDetailParagraph[] };
 }
 
-export interface Document {
-  id: string;
-  name: string;
-  type: 'manual' | 'procedure' | 'specification' | 'design-doc';
-  uploadDate: Date;
-  size: string;
-  status: 'indexed' | 'processing' | 'error';
-  pages?: number;
-}
-
 export interface VoiceCommand {
   id: string;
   timestamp: Date;

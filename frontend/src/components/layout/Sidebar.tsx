@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Radio,
   Clock,
-  FileText,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -17,7 +16,6 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/session', icon: Radio, label: 'Active Session' },
   { to: '/history', icon: Clock, label: 'Structured Notes' },
-  { to: '/documents', icon: FileText, label: 'Documents' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
