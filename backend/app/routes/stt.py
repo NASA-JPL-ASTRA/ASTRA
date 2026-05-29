@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 stt_service = OpenAIStreamingTranscriptionService()
-AUTO_NOTE_CONFIDENCE_MIN = 0.85
+AUTO_NOTE_CONFIDENCE_MIN = 0.65
 
 
 def utcnow() -> datetime:
