@@ -45,6 +45,7 @@ from app.services.transcript_quality import (
     transcript_qualifies_for_notes,
 )
 from app.services.transcript_confidence import (
+    compute_confidence,
     estimate_transcript_confidence,
     extract_logprobs,
 )
@@ -148,16 +149,23 @@ async def _transcribe_uploaded_audio(
 
         task["status"] = "done"
         task["transcript"] = cleaned
-        task["confidence"] = (
-            estimate_transcript_confidence(
+        if cleaned:
+            breakdown = compute_confidence(
                 transcript=cleaned,
                 file_bytes=file_content,
                 duration_seconds=task.get("duration_seconds"),
                 openai_logprobs=openai_logprobs,
             )
-            if cleaned
-            else None
-        )
+            task["confidence"] = breakdown.value
+            logger.info(
+                "STT confidence task=%s model=%s value=%.3f source=%s "
+                "model_score=%s audio=%.3f text=%.3f logprob_count=%d",
+                task["id"], model, breakdown.value, breakdown.source,
+                f"{breakdown.model_score:.3f}" if breakdown.model_score is not None else "none",
+                breakdown.audio_score, breakdown.text_score, len(openai_logprobs),
+            )
+        else:
+            task["confidence"] = None
         task["error"] = None
         task["updated_at"] = utcnow()
 

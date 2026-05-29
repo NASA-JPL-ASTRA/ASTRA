@@ -1,14 +1,24 @@
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 SUPPORTED_STT_MODELS = {
     "gpt-4o-mini-transcribe",
     "gpt-4o-transcribe",
     "gpt-4o-transcribe-diarize",
+}
+
+# Models that return token-level log probabilities via `include[]=logprobs`.
+# Diarize is intentionally excluded — it does not expose logprobs today.
+LOGPROB_CAPABLE_MODELS = {
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe",
 }
 
 
@@ -58,6 +68,10 @@ class OpenAIStreamingTranscriptionService:
             "model": resolved_model,
             "stream": "true",
         }
+        # Ask OpenAI for token log probabilities so confidence can be derived from
+        # the model itself rather than only from audio/text heuristics.
+        if resolved_model in LOGPROB_CAPABLE_MODELS:
+            form_data["include[]"] = "logprobs"
         resolved_language = language or self.language
         resolved_prompt = prompt or self.prompt
         if resolved_language:
