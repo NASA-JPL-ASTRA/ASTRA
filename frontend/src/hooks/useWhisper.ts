@@ -22,12 +22,14 @@ const TARGET_SAMPLE_RATE = 16000;
 
 /** End an utterance and send STT after this much trailing silence (pause-based chunking). */
 const PAUSE_TO_FLUSH_SEC = 0.45;
+/** Drop very short bursts; these are usually clicks, bumps, or room noise. */
+const MIN_UTTERANCE_SEC = 0.35;
 /** Safety cap so one uninterrupted monologue still ships in bounded chunks. */
 const MAX_UTTERANCE_SEC = 8;
 
 /** When both stay below these, skip STT upload (reduces silence / room-noise hallucinations). */
-const SILENCE_RMS_MAX = 0.006;
-const SILENCE_PEAK_MAX = 0.022;
+const SILENCE_RMS_MAX = 0.01;
+const SILENCE_PEAK_MAX = 0.035;
 const LEVEL_UPDATE_INTERVAL_MS = 80;
 const MAX_SENTENCE_CHARS = 400;
 const SENTENCE_TERMINATOR_RE = /[.!?。！？][\s"')\]]*$/;
@@ -495,6 +497,9 @@ export function useWhisper() {
       const resampled = downsample(merged, inputRate, TARGET_SAMPLE_RATE);
       const pcm16 = float32ToInt16(resampled);
       const durationSeconds = resampled.length / TARGET_SAMPLE_RATE;
+      if (durationSeconds < MIN_UTTERANCE_SEC) {
+        return null;
+      }
       const sessionId = backendSessionIdRef.current;
       if (!sessionId) return null;
 
@@ -515,8 +520,8 @@ export function useWhisper() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: pipeline.deviceId ? { exact: pipeline.deviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
+          echoCancellation: true,
+          noiseSuppression: true,
           autoGainControl: false,
           channelCount: 1,
         },
