@@ -32,6 +32,7 @@ UNKNOWN_QUERY_REPLY = (
 )
 
 DEFAULT_EVENT_MERGE_WINDOW_SEC = float(os.getenv("EVENT_MERGE_WINDOW_SEC", "0.05"))
+ALL_SCENARIOS = "__all__"
 
 # Map legacy / LLM scenario names to generator output folder names.
 SCENARIO_FOLDER_ALIASES: dict[str, str] = {
@@ -40,12 +41,12 @@ SCENARIO_FOLDER_ALIASES: dict[str, str] = {
 
 
 SCENARIO_ALIASES: dict[str, list[str]] = {
-    "test_1_straight_line": ["straight line", "straight-line", "test 1", "test_1", "straight"],
-    "test_2_uphill": ["test 2", "test_2", "uphill", "uphill climb", "nominal mission", "nominal trajectory"],
-    "test_3_stops_starts_turns": ["test 3", "test_3", "stops starts turns", "stop start turn"],
-    "test_4_motor_stall": ["test 4", "test_4", "motor stall", "stall"],
-    "test_5_imu_malfunction": ["test 5", "test_5", "imu malfunction", "imu anomaly"],
-    "test_6_command_error": ["test 6", "test_6", "command error"],
+    "test_1_straight_line": ["straight line", "straight-line", "test 1", "test1", "test_1", "test one", "straight"],
+    "test_2_uphill": ["test 2", "test2", "test_2", "test two", "uphill", "uphill climb", "nominal mission", "nominal trajectory"],
+    "test_3_stops_starts_turns": ["test 3", "test3", "test_3", "test three", "stops starts turns", "stop start turn"],
+    "test_4_motor_stall": ["test 4", "test4", "test_4", "test four", "motor stall", "stall"],
+    "test_5_imu_malfunction": ["test 5", "test5", "test_5", "test five", "imu malfunction", "imu anomaly"],
+    "test_6_command_error": ["test 6", "test6", "test_6", "test six", "command error"],
 }
 
 EVENT_FILTER_ALIASES: dict[str, list[str]] = {
@@ -53,6 +54,7 @@ EVENT_FILTER_ALIASES: dict[str, list[str]] = {
     "nav.bump_detected": ["nav.bump_detected", "bump", "obstacle"],
     "stall": ["stall", "obstacle", "current_limit", "emergency_stop"],
     "motor stall": ["stall", "obstacle", "current_limit", "emergency_stop"],
+    "fault code": ["fault code", "fault_code", "fault_set", "current_limit_fault", "current limit"],
     "current limit": ["current_limit", "current limit", "current exceeded"],
     "fault": ["fault", "current_limit", "anomaly", "rejected"],
     "imu": ["imu", "data_anomaly", "selftest"],
@@ -117,6 +119,16 @@ def infer_scenario_from_transcript(transcript: str, default_scenario: str) -> st
         if any(alias in text for alias in aliases):
             return scenario
     return default_scenario
+
+
+def transcript_mentions_scenario(transcript: str) -> bool:
+    text = transcript.lower()
+    for scenario, aliases in SCENARIO_ALIASES.items():
+        if scenario.lower() in text:
+            return True
+        if any(alias in text for alias in aliases):
+            return True
+    return False
 
 
 async def _openai_chat_json(
@@ -188,6 +200,8 @@ async def parse_command_intent(
         "  - query_channel_at_event: find channel signal values at/near matching event timestamps\n"
         "- If user asks for telemetry events, set action=query_event_log.\n"
         "- If user asks for signals like imu.accel_x or motors.motor1_current, set action=query_channel_log.\n"
+        "- If user asks about fault codes, faults, or alarms, set action=query_event_log "
+        "and choose a fault-related event_filter from known_events. If no known_events entry is fault-related, use event_filter='fault'.\n"
         "- If user asks 'value of <signal> when <event> happens' or 'at the time of <event>' then set action=query_channel_at_event.\n"
         "- For query_channel_at_event, you MUST set event_filter and signal_names.\n"
         "- Prefer event_filter values from known_events for the selected scenario. "
@@ -255,9 +269,6 @@ def _event_filter_terms(filter_text: str) -> list[str]:
         return []
     terms = {filter_text}
     terms.update(EVENT_FILTER_ALIASES.get(filter_text, []))
-    for key, aliases in EVENT_FILTER_ALIASES.items():
-        if key in filter_text:
-            terms.update(aliases)
     return sorted(terms, key=len, reverse=True)
 
 
@@ -326,6 +337,113 @@ def resolve_event_filter_for_scenario(
     return best_filter if best_score >= 0.62 else raw_filter
 
 
+def _apply_transcript_intent_hints(transcript: str, intent: dict[str, Any]) -> dict[str, Any]:
+    q = transcript.lower()
+    event_filter = str(intent.get("event_filter") or "").strip().lower()
+    action = str(intent.get("action") or "unknown")
+
+    asks_fault_code = bool(re.search(r"\bfault\s+codes?\b", q))
+    asks_fault_or_alarm = bool(re.search(r"\bfaults?\b|\balarms?\b", q))
+    empty_filter = event_filter in {"", "none", "null", "all", "any"}
+    faultish_filter = any(
+        term in event_filter
+        for term in ("fault", "alarm", "current_limit", "current limit", "anomaly", "rejected")
+    )
+    codeish_filter = any(
+        term in event_filter
+        for term in ("fault code", "fault_code", "fault_set", "current_limit", "current limit")
+    )
+    if asks_fault_code and action in {"unknown", "query_event_log"} and (empty_filter or not codeish_filter):
+        intent = {**intent}
+        intent["action"] = "query_event_log"
+        intent["event_filter"] = "fault code"
+    elif asks_fault_or_alarm and action in {"unknown", "query_event_log"} and (empty_filter or not faultish_filter):
+        intent = {**intent}
+        intent["action"] = "query_event_log"
+        intent["event_filter"] = "fault"
+    return intent
+
+
+def _is_broad_fault_query(transcript: str, intent: dict[str, Any]) -> bool:
+    if transcript_mentions_scenario(transcript):
+        return False
+    action = str(intent.get("action") or "")
+    event_filter = str(intent.get("event_filter") or "").lower()
+    q = transcript.lower()
+    asks_fault_code = bool(re.search(r"\bfault\s+codes?\b|\bfaults?\b|\balarms?\b", q))
+    faultish_filter = any(
+        term in event_filter
+        for term in ("fault", "alarm", "current_limit", "current limit", "anomaly", "rejected")
+    )
+    return asks_fault_code and action == "query_event_log" and faultish_filter
+
+
+def _collect_matching_events(scenario: str, filter_text: str) -> list[tuple[str, str, str]]:
+    matches: list[tuple[str, str, str]] = []
+    for event in get_session_events(session_id=scenario):
+        if not _event_matches(event, filter_text):
+            continue
+        matches.append(
+            (
+                _format_ts(float(event["timestamp"])),
+                str(event.get("evr_name") or ""),
+                str(event.get("message") or ""),
+            )
+        )
+    return matches
+
+
+def _merge_event_matches(
+    items: list[tuple[str, str, str]],
+    window_sec: float,
+) -> list[tuple[str, str, str, int]]:
+    if not items:
+        return []
+    merged: list[tuple[str, str, str, int]] = []
+    cur_ts, cur_etype, cur_msg = items[0]
+    cur_count = 1
+    try:
+        cur_ts_f = float(cur_ts)
+    except ValueError:
+        cur_ts_f = None
+
+    for ts, etype, msg in items[1:]:
+        same_payload = etype == cur_etype and msg == cur_msg
+        try:
+            ts_f = float(ts)
+        except ValueError:
+            ts_f = None
+
+        within = False
+        if cur_ts_f is not None and ts_f is not None:
+            within = (ts_f - cur_ts_f) <= window_sec
+
+        if same_payload and within:
+            cur_count += 1
+            continue
+
+        merged.append((cur_ts, cur_etype, cur_msg, cur_count))
+        cur_ts, cur_etype, cur_msg = ts, etype, msg
+        cur_count = 1
+        cur_ts_f = ts_f
+
+    merged.append((cur_ts, cur_etype, cur_msg, cur_count))
+    return merged
+
+
+def _event_filter_label(event_filter: str | None) -> str:
+    text = (event_filter or "").lower()
+    if "fault code" in text or "fault_code" in text:
+        return "fault code"
+    if any(term in text for term in ("fault", "current_limit", "alarm")):
+        return "fault-related"
+    if "warning" in text:
+        return "warning"
+    if "anomaly" in text:
+        return "anomaly"
+    return "matching"
+
+
 def query_event_log(
     telemetry_root: Path,
     scenario: str,
@@ -338,19 +456,16 @@ def query_event_log(
     filter_text = (event_filter or "").strip().lower()
     y_pattern = re.compile(r"\by\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*m\b", re.IGNORECASE)
 
-    matches: list[tuple[str, str, str]] = []
-    for event in get_session_events(session_id=scenario):
-        if not _event_matches(event, filter_text):
-            continue
-        matches.append(
-            (
-                _format_ts(float(event["timestamp"])),
-                str(event.get("evr_name") or ""),
-                str(event.get("message") or ""),
-            )
-        )
+    matches = _collect_matching_events(scenario, filter_text)
 
     if not matches:
+        if filter_text:
+            label = _event_filter_label(event_filter)
+            if label == "fault code":
+                return f"No fault codes were found for {scenario}."
+            if label == "fault-related":
+                return f"No fault-related events were found for {scenario}."
+            return f"No matching events found in Influx session '{scenario}' for filter '{event_filter}'."
         return f"No matching events found in Influx session '{scenario}'."
 
     if wanted_field == "y" or ("bump" in filter_text and not wanted_field):
@@ -372,45 +487,8 @@ def query_event_log(
         ts, etype, msg = matches[-1]
         return f"Latest event in {scenario}: [{ts}] {etype} - {msg}"
 
-    def merge_near_duplicates(
-        items: list[tuple[str, str, str]],
-        window_sec: float,
-    ) -> list[tuple[str, str, str, int]]:
-        if not items:
-            return []
-        merged: list[tuple[str, str, str, int]] = []
-        cur_ts, cur_etype, cur_msg = items[0]
-        cur_count = 1
-        try:
-            cur_ts_f = float(cur_ts)
-        except ValueError:
-            cur_ts_f = None
-
-        for ts, etype, msg in items[1:]:
-            same_payload = etype == cur_etype and msg == cur_msg
-            try:
-                ts_f = float(ts)
-            except ValueError:
-                ts_f = None
-
-            within = False
-            if cur_ts_f is not None and ts_f is not None:
-                within = (ts_f - cur_ts_f) <= window_sec
-
-            if same_payload and within:
-                cur_count += 1
-                continue
-
-            merged.append((cur_ts, cur_etype, cur_msg, cur_count))
-            cur_ts, cur_etype, cur_msg = ts, etype, msg
-            cur_count = 1
-            cur_ts_f = ts_f
-
-        merged.append((cur_ts, cur_etype, cur_msg, cur_count))
-        return merged
-
     lines = [f"Found {len(matches)} matching events in {scenario}:"]
-    merged = merge_near_duplicates(matches, window_sec=DEFAULT_EVENT_MERGE_WINDOW_SEC)
+    merged = _merge_event_matches(matches, window_sec=DEFAULT_EVENT_MERGE_WINDOW_SEC)
     if len(merged) != len(matches):
         lines[0] = (
             f"Found {len(matches)} matching events in {scenario} "
@@ -419,6 +497,47 @@ def query_event_log(
     for ts, etype, msg, count in merged:
         suffix = f" (x{count})" if count > 1 else ""
         lines.append(f"- [{ts}] {etype}: {msg}{suffix}")
+    return "\n".join(lines)
+
+
+def query_event_log_across_scenarios(
+    scenarios: list[str],
+    event_filter: str | None,
+    aggregation: str,
+) -> str:
+    del aggregation
+    filter_text = (event_filter or "").strip().lower()
+    matched_by_scenario: dict[str, list[tuple[str, str, str, int]]] = {}
+    empty_scenarios: list[str] = []
+
+    for scenario in scenarios:
+        known_events = get_known_events_for_scenario(scenario)
+        scenario_filter = resolve_event_filter_for_scenario(event_filter, scenario, known_events)
+        matches = _collect_matching_events(scenario, (scenario_filter or "").strip().lower())
+        if not matches:
+            empty_scenarios.append(scenario)
+            continue
+        matched_by_scenario[scenario] = _merge_event_matches(
+            matches,
+            window_sec=DEFAULT_EVENT_MERGE_WINDOW_SEC,
+        )
+
+    label = _event_filter_label(event_filter)
+    if not matched_by_scenario:
+        if label in {"fault code", "fault-related"}:
+            return "No fault codes were found across telemetry scenarios."
+        return f"No {label} events were found across telemetry scenarios."
+
+    lines = [f"{label.capitalize()} events found across telemetry scenarios:"]
+    for scenario, events in matched_by_scenario.items():
+        lines.append(f"- {scenario}:")
+        for ts, etype, msg, count in events:
+            suffix = f" (x{count})" if count > 1 else ""
+            lines.append(f"  - [{ts}] {etype}: {msg}{suffix}")
+
+    if empty_scenarios:
+        lines.append("")
+        lines.append("No matching events found in: " + ", ".join(empty_scenarios))
     return "\n".join(lines)
 
 
@@ -599,11 +718,18 @@ def execute_intent(
     telemetry_root: Path,
     default_scenario: str,
 ) -> str:
-    scenario = normalize_scenario_folder(intent.get("scenario"), default_scenario)
+    raw_scenario = str(intent.get("scenario") or "")
+    scenario = ALL_SCENARIOS if raw_scenario == ALL_SCENARIOS else normalize_scenario_folder(raw_scenario, default_scenario)
     action = intent.get("action", "unknown")
     aggregation = intent.get("aggregation", "list")
 
     if action == "query_event_log":
+        if scenario == ALL_SCENARIOS:
+            return query_event_log_across_scenarios(
+                scenarios=list_log_scenarios(),
+                event_filter=intent.get("event_filter"),
+                aggregation=aggregation,
+            )
         return query_event_log(
             telemetry_root=telemetry_root,
             scenario=scenario,
@@ -675,10 +801,15 @@ async def answer_from_transcript(
         intent_model=intent_model,
         timeout=timeout,
     )
-    scenario = normalize_scenario_folder(intent.get("scenario"), inferred)
+    intent = _apply_transcript_intent_hints(cleaned, intent)
+    if _is_broad_fault_query(cleaned, intent):
+        intent["scenario"] = ALL_SCENARIOS
+
+    raw_scenario = str(intent.get("scenario") or "")
+    scenario = ALL_SCENARIOS if raw_scenario == ALL_SCENARIOS else normalize_scenario_folder(raw_scenario, inferred)
     if scenario != normalize_scenario_folder(inferred, scenario_default):
         known_events = get_known_events_for_scenario(scenario)
-    if intent.get("action") in {"query_event_log", "query_channel_at_event"}:
+    if scenario != ALL_SCENARIOS and intent.get("action") in {"query_event_log", "query_channel_at_event"}:
         resolved_filter = resolve_event_filter_for_scenario(
             intent.get("event_filter"),
             scenario,
