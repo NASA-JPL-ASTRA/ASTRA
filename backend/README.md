@@ -43,6 +43,34 @@ running the command, or `venv/bin/uvicorn app.main:app --reload --reload-dir app
 dependencies were not installed in **that** interpreter — run `pip install -r requirements.txt`
 again inside the activated venv.
 
+### Anaconda / Conda Python
+
+If your terminal prompt shows `(base)` and `python3 -m venv venv` fails with
+`ensurepip` errors or `pip` segmentation faults, your conda Python is not
+creating a healthy standard `venv`. Remove the broken `venv` and use a dedicated
+conda environment:
+
+```bash
+cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
+deactivate 2>/dev/null || true
+rm -rf venv
+
+conda create -n astra python=3.11 -y
+conda activate astra
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+cp -n .env.example .env
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+```
+
+For later backend runs:
+
+```bash
+cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
+conda activate astra
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+```
+
 Swagger UI: <http://localhost:8000/docs>  
 Health:     <http://localhost:8000/health>
 

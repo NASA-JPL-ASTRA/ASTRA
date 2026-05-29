@@ -68,6 +68,33 @@ npm run dev
 Backend Swagger UI: <http://localhost:8000/docs>  
 Frontend dev UI:    <http://localhost:5173>
 
+### Anaconda / Conda Python
+
+If your terminal prompt shows `(base)` and `python3 -m venv venv` fails with
+`ensurepip` errors or `pip` segmentation faults, do not keep using that broken
+`venv`. Remove it and use a clean conda environment instead:
+
+```bash
+cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
+deactivate 2>/dev/null || true
+rm -rf venv
+
+conda create -n astra python=3.11 -y
+conda activate astra
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+cp -n .env.example .env
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+```
+
+For later backend runs:
+
+```bash
+cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
+conda activate astra
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+```
+
 ## Confidence Score Checklist
 
 If confidence scores show as `0%` on another machine, check these first:
