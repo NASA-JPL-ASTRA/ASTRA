@@ -41,37 +41,6 @@ VITE_SESSION_WS_URL=ws://localhost:8000/ws/sessions
 Both fall back to `window.location.host` if unset (see `src/config/env.ts`),
 so production builds served from the same origin work without configuration.
 
-## Confidence and Noise Handling
-
-The frontend displays the `confidence` value sent by the backend over
-`transcript.chunk.ready` and `stt.task.done` WebSocket events. If the backend
-does not include `confidence`, the live transcript defaults to `0%`.
-
-For another machine showing only `0%`, verify:
-
-```bash
-git checkout confidence
-git pull origin confidence
-```
-
-Then restart both processes. If the backend uses a different port or host, update
-`.env.local` so the frontend connects to the same backend:
-
-```env
-VITE_API_URL=http://localhost:8000/api
-VITE_SESSION_WS_URL=ws://localhost:8000/ws/sessions
-```
-
-The browser-side recorder filters obvious noise before upload:
-
-- Echo cancellation and noise suppression are requested from `getUserMedia`.
-- Quiet chunks below the RMS/peak threshold are dropped.
-- Very short bursts are dropped because they are often clicks, bumps, or room
-  noise.
-
-Low-confidence transcripts can still appear in the live panel for operator
-review, but the backend does not save them into notes below the `65%` threshold.
-
 ## Runtime Flow
 
 1. Operator clicks **Start** → `POST /api/sessions` → backend returns `sid`.

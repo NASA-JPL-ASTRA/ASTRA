@@ -157,7 +157,6 @@ class STTTaskUpdate(BaseModel):
     """PUT /api/sessions/{sid}/stt/tasks/{tid}"""
     status:     str
     transcript: Optional[str] = None
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     error:      Optional[str] = None
 
 
@@ -172,7 +171,6 @@ class STTTaskResponse(BaseModel):
     model:            Optional[str] = None
     status:           str
     transcript:       Optional[str]
-    confidence:       Optional[float] = None
     error:            Optional[str]
     created_at:       datetime
     updated_at:       datetime

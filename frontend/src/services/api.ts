@@ -152,18 +152,13 @@ export function getStructureNote(sessionId: string): Promise<StructureNoteDocume
 
 export function postStructureNoteVoiceChunk(
   sessionId: string,
-  payload: {
-    transcript: string;
-    request_anomaly_capture?: boolean;
-    utterance_start_ms?: number;
-  },
+  payload: { transcript: string; request_anomaly_capture?: boolean },
 ): Promise<StructureNoteDocument> {
   return request<StructureNoteDocument>(`/sessions/${sessionId}/structure-note/voice-chunk`, {
     method: 'POST',
     body: JSON.stringify({
       transcript: payload.transcript,
       request_anomaly_capture: payload.request_anomaly_capture ?? false,
-      utterance_start_ms: payload.utterance_start_ms,
     }),
   });
 }

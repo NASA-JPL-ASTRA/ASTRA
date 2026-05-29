@@ -22,13 +22,12 @@ The legacy local `whisper/` service has been removed.
 ## Quick Start
 
 ```bash
-python3 -m venv venv
+python -m venv venv
 source venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 
 cp .env.example .env          # then fill in OPENAI_API_KEY
-python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
 ```
 
 **Why `--reload-dir app`:** On Windows (especially with OneDrive), files under `venv/` can be
@@ -43,81 +42,11 @@ running the command, or `venv/bin/uvicorn app.main:app --reload --reload-dir app
 dependencies were not installed in **that** interpreter — run `pip install -r requirements.txt`
 again inside the activated venv.
 
-### Anaconda / Conda Python
-
-If your terminal prompt shows `(base)` and `python3 -m venv venv` fails with
-`ensurepip` errors or `pip` segmentation faults, your conda Python is not
-creating a healthy standard `venv`. Remove the broken `venv` and use a dedicated
-conda environment:
-
-```bash
-cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
-deactivate 2>/dev/null || true
-rm -rf venv
-
-conda create -n astra python=3.11 -y
-conda activate astra
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
-cp -n .env.example .env
-python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
-```
-
-For later backend runs:
-
-```bash
-cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
-conda activate astra
-python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
-```
-
 Swagger UI: <http://localhost:8000/docs>  
 Health:     <http://localhost:8000/health>
 
 `load_dotenv()` runs at startup (see `app/main.py`), so `backend/.env` is picked
 up automatically without exporting variables in your shell.
-
-## Confidence Scores and Notes
-
-The `confidence` branch computes a `confidence` value for each completed STT
-task. For `gpt-4o-mini-transcribe` and `gpt-4o-transcribe`, the backend asks
-OpenAI for token log probabilities and derives model confidence from them. If
-log probabilities are unavailable, the backend falls back to an audio/text signal
-estimate.
-
-Successful confidence calculation prints a backend log line like:
-
-```text
-STT confidence task=... model=... value=... source=... logprob_count=...
-```
-
-If another developer sees every transcript as `0%` in the frontend, they should
-confirm they are running the latest `confidence` branch and have restarted the
-backend after pulling:
-
-```bash
-git branch --show-current
-git log --oneline -3
-```
-
-Saved notes are intentionally stricter than live transcripts. A transcript is
-shown in the live panel after STT finishes, but it is saved into notes only when
-its confidence is at least `65%` and it passes the text-quality filters. This
-keeps low-confidence speech and common background-noise hallucinations out of the
-canonical notes.
-
-## Background Noise / Hallucination Tips
-
-Speech-to-text can hallucinate words from fans, keyboard noise, music, or people
-talking in the background. The frontend already drops very quiet chunks and short
-bursts before upload, and the browser requests noise suppression and echo
-cancellation. For best results:
-
-- Use a headset or directional microphone when possible.
-- Keep the mic away from keyboards, speakers, and fans.
-- Speak in short phrases with small pauses; pauses help ASTRA split chunks.
-- Treat low-confidence live text as review-only; it will not be saved as a note
-  below the `65%` threshold.
 
 ## Environment Variables
 

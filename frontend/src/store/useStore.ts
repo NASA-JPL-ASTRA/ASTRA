@@ -125,7 +125,6 @@ interface AppState {
     isFinal: boolean,
     speakerId?: string,
     utteranceStartMs?: number,
-    confidence?: number,
   ) => void;
   setMicSpeakers: (sources: MicSourceId[]) => void;
   setActiveSpeaker: (speakerId: string) => void;
@@ -231,15 +230,11 @@ export const useStore = create<AppState>((set, get) => ({
         t.id === id ? { ...t, rawText: newText } : t
       ),
     })),
-  upsertStreamingTranscription: (id, transcript, isFinal, speakerId, utteranceStartMs, confidence) =>
+  upsertStreamingTranscription: (id, transcript, isFinal, speakerId, utteranceStartMs) =>
     set((s) => {
       const exists = s.transcriptions.some((t) => t.id === id);
       const resolvedSpeakerId = speakerId ?? s.activeSpeakerId;
       const resolvedStartMs = utteranceStartMs ?? Date.now();
-      const resolvedConfidence =
-        typeof confidence === 'number' && Number.isFinite(confidence)
-          ? Math.min(1, Math.max(0, confidence))
-          : undefined;
       if (exists) {
         const next = s.transcriptions.map((t) =>
           t.id === id
@@ -249,7 +244,6 @@ export const useStore = create<AppState>((set, get) => ({
                 isFinal,
                 speakerId: speakerId ?? t.speakerId,
                 utteranceStartMs: t.utteranceStartMs || resolvedStartMs,
-                confidence: resolvedConfidence ?? t.confidence,
               }
             : t,
         );
@@ -263,7 +257,7 @@ export const useStore = create<AppState>((set, get) => ({
           utteranceStartMs: resolvedStartMs,
           speakerId: resolvedSpeakerId,
           rawText: transcript,
-          confidence: resolvedConfidence ?? 0,
+          confidence: 0.9,
           isFinal,
         },
       ];
