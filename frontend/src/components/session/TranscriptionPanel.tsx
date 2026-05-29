@@ -20,6 +20,7 @@ import { useStore } from '../../store/useStore';
 import type { LiveTranscription, SpeakerProfile } from '../../store/useStore';
 import { loadDualMicConfig } from '../../config/audioInputs';
 import { getSttModelLabel } from '../../config/sttModels';
+import { createNote, postStructureNoteVoiceChunk } from '../../services/api';
 
 const COLOR_SWATCHES = [
   '#00d4ff',
@@ -37,6 +38,8 @@ const FALLBACK_SPEAKER: SpeakerProfile = {
   name: 'Unknown',
   color: '#8899aa',
 };
+const CONFIDENCE_GREEN_MIN = 0.85;
+const CONFIDENCE_AMBER_MIN = 0.65;
 
 function getSpeakerInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -162,6 +165,8 @@ function TranscriptionEntryRow({
   onSave,
   onCancel,
   onSpeakerChange,
+  onConfirmNote,
+  isConfirming,
 }: {
   entry: LiveTranscription;
   speaker: SpeakerProfile;
@@ -174,11 +179,15 @@ function TranscriptionEntryRow({
   onSave: () => void;
   onCancel: () => void;
   onSpeakerChange: (speakerId: string) => void;
+  onConfirmNote: () => void;
+  isConfirming: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const displayText = useTypewriter(entry.rawText, entry.isFinal);
   const isTyping = displayText !== entry.rawText || !entry.isFinal;
   const speakerInitials = getSpeakerInitials(speaker.name);
+  const needsConfirmation =
+    entry.isFinal && entry.noteStatus === 'pending' && entry.confidence < CONFIDENCE_GREEN_MIN;
 
   useEffect(() => {
     if (isEditing && textareaRef.current) {
@@ -286,17 +295,35 @@ function TranscriptionEntryRow({
             <div className="flex items-center gap-1.5">
               <div
                 className={`w-2 h-2 rounded-full ${
-                  entry.confidence > 0.9
+                  entry.confidence >= CONFIDENCE_GREEN_MIN
                     ? 'bg-accent-green'
-                    : entry.confidence > 0.8
+                    : entry.confidence >= CONFIDENCE_AMBER_MIN
                       ? 'bg-accent-amber'
                       : 'bg-accent-red'
                 }`}
               />
-              <span className="text-[11px] text-text-muted font-mono">
+              <span
+                className="text-[11px] text-text-muted font-mono"
+                title="Speech confidence"
+              >
                 {(entry.confidence * 100).toFixed(0)}%
               </span>
             </div>
+            {entry.noteStatus === 'confirmed' && (
+              <span className="rounded border border-accent-green/20 bg-accent-green/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-green">
+                confirmed note
+              </span>
+            )}
+            {needsConfirmation && (
+              <button
+                onClick={onConfirmNote}
+                disabled={isConfirming}
+                className="rounded border border-accent-amber/25 bg-accent-amber/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-amber transition-colors hover:bg-accent-amber/20 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Confirm this transcription before saving it as a note"
+              >
+                {isConfirming ? 'saving...' : 'confirm note'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -470,6 +497,7 @@ function SpeakerRail({
 export default function TranscriptionPanel() {
   const {
     transcriptions,
+    backendSessionId,
     speakers,
     activeSpeakerId,
     connectedMicCount,
@@ -485,6 +513,7 @@ export default function TranscriptionPanel() {
     updateSpeaker,
     removeSpeaker,
     setTranscriptionSpeaker,
+    setTranscriptionNoteStatus,
   } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -494,6 +523,8 @@ export default function TranscriptionPanel() {
   // Editing state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   // Auto-scroll — paused while editing
   useEffect(() => {
@@ -523,6 +554,30 @@ export default function TranscriptionPanel() {
 
   const handleCancel = () => {
     setEditingId(null);
+  };
+
+  const handleConfirmNote = async (entry: LiveTranscription, speaker: SpeakerProfile) => {
+    if (!backendSessionId || !entry.rawText.trim()) return;
+    setConfirmingId(entry.id);
+    setConfirmError(null);
+    try {
+      await createNote(backendSessionId, {
+        timestamp: entry.timestamp.toISOString(),
+        speaker: speaker.name,
+        content: entry.rawText.trim(),
+        type: 'observation',
+        tags: ['confirmed-transcription', `confidence-${Math.round(entry.confidence * 100)}`],
+      });
+      await postStructureNoteVoiceChunk(backendSessionId, {
+        transcript: entry.rawText.trim(),
+        utterance_start_ms: entry.utteranceStartMs,
+      });
+      setTranscriptionNoteStatus(entry.id, 'confirmed');
+    } catch (error) {
+      setConfirmError(error instanceof Error ? error.message : 'Failed to save note');
+    } finally {
+      setConfirmingId(null);
+    }
   };
 
   const recordingSeconds =
@@ -612,6 +667,11 @@ export default function TranscriptionPanel() {
         <div className="mt-3">
           <AudioVisualizer level={audioLevel} isActive={isActivelyListening} />
         </div>
+        {confirmError && (
+          <div className="mt-2 rounded-lg border border-accent-red/20 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
+            {confirmError}
+          </div>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -657,6 +717,8 @@ export default function TranscriptionPanel() {
                     onSpeakerChange={(speakerId) =>
                       setTranscriptionSpeaker(entry.id, speakerId)
                     }
+                    onConfirmNote={() => handleConfirmNote(entry, speaker)}
+                    isConfirming={confirmingId === entry.id}
                   />
                 );
               })}

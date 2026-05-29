@@ -29,6 +29,7 @@ export interface LiveTranscription {
   rawText: string;
   confidence: number;
   isFinal: boolean;
+  noteStatus?: 'auto' | 'pending' | 'confirmed';
 }
 
 function sortTranscriptions(entries: LiveTranscription[]): LiveTranscription[] {
@@ -125,6 +126,7 @@ interface AppState {
     isFinal: boolean,
     speakerId?: string,
     utteranceStartMs?: number,
+    confidence?: number,
   ) => void;
   setMicSpeakers: (sources: MicSourceId[]) => void;
   setActiveSpeaker: (speakerId: string) => void;
@@ -135,6 +137,10 @@ interface AppState {
   ) => void;
   removeSpeaker: (speakerId: string) => void;
   setTranscriptionSpeaker: (transcriptionId: string, speakerId: string) => void;
+  setTranscriptionNoteStatus: (
+    transcriptionId: string,
+    status: NonNullable<LiveTranscription['noteStatus']>,
+  ) => void;
   clearTranscriptions: () => void;
   addLiveNote: (note: BackendNote) => void;
   updateLiveNote: (noteId: string, note: BackendNote) => void;
@@ -230,21 +236,37 @@ export const useStore = create<AppState>((set, get) => ({
         t.id === id ? { ...t, rawText: newText } : t
       ),
     })),
-  upsertStreamingTranscription: (id, transcript, isFinal, speakerId, utteranceStartMs) =>
+  upsertStreamingTranscription: (id, transcript, isFinal, speakerId, utteranceStartMs, confidence) =>
     set((s) => {
       const exists = s.transcriptions.some((t) => t.id === id);
       const resolvedSpeakerId = speakerId ?? s.activeSpeakerId;
       const resolvedStartMs = utteranceStartMs ?? Date.now();
+      const resolvedConfidence =
+        typeof confidence === 'number' && Number.isFinite(confidence)
+          ? Math.min(1, Math.max(0, confidence))
+          : undefined;
       if (exists) {
         const next = s.transcriptions.map((t) =>
           t.id === id
-            ? {
-                ...t,
-                rawText: transcript,
-                isFinal,
-                speakerId: speakerId ?? t.speakerId,
-                utteranceStartMs: t.utteranceStartMs || resolvedStartMs,
-              }
+            ? (() => {
+                const nextConfidence = resolvedConfidence ?? t.confidence;
+                const nextNoteStatus: LiveTranscription['noteStatus'] =
+                  t.noteStatus ??
+                  (isFinal
+                    ? nextConfidence >= 0.85
+                      ? 'auto'
+                      : 'pending'
+                    : undefined);
+                return {
+                  ...t,
+                  rawText: transcript,
+                  isFinal,
+                  speakerId: speakerId ?? t.speakerId,
+                  utteranceStartMs: t.utteranceStartMs || resolvedStartMs,
+                  confidence: nextConfidence,
+                  noteStatus: nextNoteStatus,
+                };
+              })()
             : t,
         );
         return { transcriptions: sortTranscriptions(next) };
@@ -257,8 +279,13 @@ export const useStore = create<AppState>((set, get) => ({
           utteranceStartMs: resolvedStartMs,
           speakerId: resolvedSpeakerId,
           rawText: transcript,
-          confidence: 0.9,
+          confidence: resolvedConfidence ?? 0,
           isFinal,
+          noteStatus: (isFinal
+            ? (resolvedConfidence ?? 0) >= 0.85
+              ? 'auto'
+              : 'pending'
+            : undefined) as LiveTranscription['noteStatus'],
         },
       ];
       return { transcriptions: sortTranscriptions(next) };
@@ -331,6 +358,12 @@ export const useStore = create<AppState>((set, get) => ({
         ),
       };
     }),
+  setTranscriptionNoteStatus: (transcriptionId, status) =>
+    set((s) => ({
+      transcriptions: s.transcriptions.map((entry) =>
+        entry.id === transcriptionId ? { ...entry, noteStatus: status } : entry
+      ),
+    })),
   clearTranscriptions: () => set({ transcriptions: [] }),
   addLiveNote: (note) =>
     set((s) => ({ liveNotes: [...s.liveNotes, note] })),

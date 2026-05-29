@@ -219,6 +219,12 @@ function resolveUtteranceStartMs(
   return pipelines.get(micSource)?.utteranceStartMs ?? Date.now();
 }
 
+function resolveConfidence(data: Record<string, unknown>): number | undefined {
+  const raw = data.confidence;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
+  return Math.min(1, Math.max(0, raw));
+}
+
 export function useWhisper() {
   const {
     isRecording,
@@ -281,7 +287,12 @@ export function useWhisper() {
   ]);
 
   const applySttDelta = useCallback(
-    (micSource: MicSourceId, transcript: string, utteranceStartMs: number) => {
+    (
+      micSource: MicSourceId,
+      transcript: string,
+      utteranceStartMs: number,
+      confidence?: number,
+    ) => {
       const pipeline = pipelinesRef.current.get(micSource);
       if (!pipeline || !transcript) return;
       if (!pipeline.sentenceId) {
@@ -294,13 +305,19 @@ export function useWhisper() {
         false,
         pipeline.speakerId,
         utteranceStartMs,
+        confidence,
       );
     },
     [],
   );
 
   const applySttDone = useCallback(
-    (micSource: MicSourceId, transcript: string, utteranceStartMs: number) => {
+    (
+      micSource: MicSourceId,
+      transcript: string,
+      utteranceStartMs: number,
+      confidence?: number,
+    ) => {
       const pipeline = pipelinesRef.current.get(micSource);
       if (!pipeline || !transcript) return;
       if (!pipeline.sentenceId) {
@@ -317,6 +334,7 @@ export function useWhisper() {
           true,
           pipeline.speakerId,
           utteranceStartMs,
+          confidence,
         );
         pipeline.sentenceId = null;
         pipeline.sentenceBase = '';
@@ -328,6 +346,7 @@ export function useWhisper() {
           false,
           pipeline.speakerId,
           utteranceStartMs,
+          confidence,
         );
       }
     },
@@ -352,7 +371,12 @@ export function useWhisper() {
           micSource,
           pipelinesRef.current,
         );
-        applySttDelta(micSource, transcript, utteranceStartMs);
+        applySttDelta(
+          micSource,
+          transcript,
+          utteranceStartMs,
+          resolveConfidence(data),
+        );
       } else if (msg.event === 'stt.task.done') {
         const micSource = resolveMicFromWsData(data, chunkMetaRef.current);
         if (!micSource) return;
@@ -364,7 +388,12 @@ export function useWhisper() {
           micSource,
           pipelinesRef.current,
         );
-        applySttDone(micSource, transcript, utteranceStartMs);
+        applySttDone(
+          micSource,
+          transcript,
+          utteranceStartMs,
+          resolveConfidence(data),
+        );
       } else if (msg.event === 'note.created') {
         addLiveNoteRef.current(data as unknown as BackendNote);
       } else if (msg.event === 'note.updated') {
