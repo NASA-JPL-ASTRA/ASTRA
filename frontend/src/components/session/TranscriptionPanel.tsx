@@ -37,6 +37,8 @@ const FALLBACK_SPEAKER: SpeakerProfile = {
   name: 'Unknown',
   color: '#8899aa',
 };
+const CONFIDENCE_GREEN_MIN = 0.85;
+const CONFIDENCE_AMBER_MIN = 0.65;
 
 function getSpeakerInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -286,14 +288,17 @@ function TranscriptionEntryRow({
             <div className="flex items-center gap-1.5">
               <div
                 className={`w-2 h-2 rounded-full ${
-                  entry.confidence > 0.9
+                  entry.confidence >= CONFIDENCE_GREEN_MIN
                     ? 'bg-accent-green'
-                    : entry.confidence > 0.8
+                    : entry.confidence >= CONFIDENCE_AMBER_MIN
                       ? 'bg-accent-amber'
                       : 'bg-accent-red'
                 }`}
               />
-              <span className="text-[11px] text-text-muted font-mono">
+              <span
+                className="text-[11px] text-text-muted font-mono"
+                title="Speech confidence"
+              >
                 {(entry.confidence * 100).toFixed(0)}%
               </span>
             </div>

@@ -22,12 +22,14 @@ const TARGET_SAMPLE_RATE = 16000;
 
 /** End an utterance and send STT after this much trailing silence (pause-based chunking). */
 const PAUSE_TO_FLUSH_SEC = 0.45;
+/** Drop very short bursts; these are usually clicks, bumps, or room noise. */
+const MIN_UTTERANCE_SEC = 0.35;
 /** Safety cap so one uninterrupted monologue still ships in bounded chunks. */
 const MAX_UTTERANCE_SEC = 8;
 
 /** When both stay below these, skip STT upload (reduces silence / room-noise hallucinations). */
-const SILENCE_RMS_MAX = 0.006;
-const SILENCE_PEAK_MAX = 0.022;
+const SILENCE_RMS_MAX = 0.01;
+const SILENCE_PEAK_MAX = 0.035;
 const LEVEL_UPDATE_INTERVAL_MS = 80;
 const MAX_SENTENCE_CHARS = 400;
 const SENTENCE_TERMINATOR_RE = /[.!?。！？][\s"')\]]*$/;
@@ -219,6 +221,12 @@ function resolveUtteranceStartMs(
   return pipelines.get(micSource)?.utteranceStartMs ?? Date.now();
 }
 
+function resolveConfidence(data: Record<string, unknown>): number | undefined {
+  const raw = data.confidence;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
+  return Math.min(1, Math.max(0, raw));
+}
+
 export function useWhisper() {
   const {
     isRecording,
@@ -281,7 +289,12 @@ export function useWhisper() {
   ]);
 
   const applySttDelta = useCallback(
-    (micSource: MicSourceId, transcript: string, utteranceStartMs: number) => {
+    (
+      micSource: MicSourceId,
+      transcript: string,
+      utteranceStartMs: number,
+      confidence?: number,
+    ) => {
       const pipeline = pipelinesRef.current.get(micSource);
       if (!pipeline || !transcript) return;
       if (!pipeline.sentenceId) {
@@ -294,13 +307,19 @@ export function useWhisper() {
         false,
         pipeline.speakerId,
         utteranceStartMs,
+        confidence,
       );
     },
     [],
   );
 
   const applySttDone = useCallback(
-    (micSource: MicSourceId, transcript: string, utteranceStartMs: number) => {
+    (
+      micSource: MicSourceId,
+      transcript: string,
+      utteranceStartMs: number,
+      confidence?: number,
+    ) => {
       const pipeline = pipelinesRef.current.get(micSource);
       if (!pipeline || !transcript) return;
       if (!pipeline.sentenceId) {
@@ -317,6 +336,7 @@ export function useWhisper() {
           true,
           pipeline.speakerId,
           utteranceStartMs,
+          confidence,
         );
         pipeline.sentenceId = null;
         pipeline.sentenceBase = '';
@@ -328,6 +348,7 @@ export function useWhisper() {
           false,
           pipeline.speakerId,
           utteranceStartMs,
+          confidence,
         );
       }
     },
@@ -352,7 +373,12 @@ export function useWhisper() {
           micSource,
           pipelinesRef.current,
         );
-        applySttDelta(micSource, transcript, utteranceStartMs);
+        applySttDelta(
+          micSource,
+          transcript,
+          utteranceStartMs,
+          resolveConfidence(data),
+        );
       } else if (msg.event === 'stt.task.done') {
         const micSource = resolveMicFromWsData(data, chunkMetaRef.current);
         if (!micSource) return;
@@ -364,7 +390,12 @@ export function useWhisper() {
           micSource,
           pipelinesRef.current,
         );
-        applySttDone(micSource, transcript, utteranceStartMs);
+        applySttDone(
+          micSource,
+          transcript,
+          utteranceStartMs,
+          resolveConfidence(data),
+        );
       } else if (msg.event === 'note.created') {
         addLiveNoteRef.current(data as unknown as BackendNote);
       } else if (msg.event === 'note.updated') {
@@ -466,6 +497,9 @@ export function useWhisper() {
       const resampled = downsample(merged, inputRate, TARGET_SAMPLE_RATE);
       const pcm16 = float32ToInt16(resampled);
       const durationSeconds = resampled.length / TARGET_SAMPLE_RATE;
+      if (durationSeconds < MIN_UTTERANCE_SEC) {
+        return null;
+      }
       const sessionId = backendSessionIdRef.current;
       if (!sessionId) return null;
 
@@ -486,8 +520,8 @@ export function useWhisper() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: pipeline.deviceId ? { exact: pipeline.deviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
+          echoCancellation: true,
+          noiseSuppression: true,
           autoGainControl: false,
           channelCount: 1,
         },

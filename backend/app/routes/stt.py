@@ -44,11 +44,17 @@ from app.services.transcript_quality import (
     transcript_is_english,
     transcript_qualifies_for_notes,
 )
+from app.services.transcript_confidence import (
+    compute_confidence,
+    estimate_transcript_confidence,
+    extract_logprobs,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 stt_service = OpenAIStreamingTranscriptionService()
+AUTO_NOTE_CONFIDENCE_MIN = 0.65
 
 
 def utcnow() -> datetime:
@@ -117,6 +123,7 @@ async def _transcribe_uploaded_audio(
     model: str,
 ) -> None:
     transcript = ""
+    openai_logprobs: list[float] = []
 
     try:
         async for event in stt_service.stream_transcription(
@@ -125,6 +132,8 @@ async def _transcribe_uploaded_audio(
             content_type=content_type,
             model=model,
         ):
+            if event.raw:
+                openai_logprobs.extend(extract_logprobs(event.raw))
             if event.type == "transcript.text.delta" and event.delta:
                 transcript += event.delta
             elif event.type == "transcript.text.done" and event.text:
@@ -140,6 +149,23 @@ async def _transcribe_uploaded_audio(
 
         task["status"] = "done"
         task["transcript"] = cleaned
+        if cleaned:
+            breakdown = compute_confidence(
+                transcript=cleaned,
+                file_bytes=file_content,
+                duration_seconds=task.get("duration_seconds"),
+                openai_logprobs=openai_logprobs,
+            )
+            task["confidence"] = breakdown.value
+            logger.info(
+                "STT confidence task=%s model=%s value=%.3f source=%s "
+                "model_score=%s audio=%.3f text=%.3f logprob_count=%d",
+                task["id"], model, breakdown.value, breakdown.source,
+                f"{breakdown.model_score:.3f}" if breakdown.model_score is not None else "none",
+                breakdown.audio_score, breakdown.text_score, len(openai_logprobs),
+            )
+        else:
+            task["confidence"] = None
         task["error"] = None
         task["updated_at"] = utcnow()
 
@@ -153,11 +179,15 @@ async def _transcribe_uploaded_audio(
                 "speaker": task.get("speaker"),
                 "audio_source": task.get("audio_source"),
                 "utterance_start_ms": task.get("utterance_start_ms"),
+                "confidence": task.get("confidence"),
             })
 
         await broadcast(sid, EVENT_STT_TASK_DONE, task)
 
-        if cleaned:
+        if cleaned and (
+            task.get("confidence") is None
+            or task.get("confidence", 0) >= AUTO_NOTE_CONFIDENCE_MIN
+        ):
             await _create_auto_note(sid, cleaned, task.get("speaker"))
             await _sync_structure_note_from_transcript(
                 sid,
@@ -192,6 +222,7 @@ async def create_stt_task(sid: str, task: STTTaskCreate):
         "duration_seconds": task.duration_seconds,
         "status":           "pending",
         "transcript":       None,
+        "confidence":       None,
         "error":            None,
         "created_at":       now,
         "updated_at":       now,
@@ -251,13 +282,25 @@ async def update_stt_task(sid: str, tid: str, update: STTTaskUpdate):
 
     task["status"]     = update.status
     task["transcript"] = update.transcript
+    task["confidence"] = (
+        update.confidence
+        if update.confidence is not None
+        else (
+            estimate_transcript_confidence(transcript=update.transcript or "")
+            if update.status == "done" and update.transcript
+            else task.get("confidence")
+        )
+    )
     task["error"]      = update.error
     task["updated_at"] = utcnow()
 
     if update.status == "done":
         await broadcast(sid, EVENT_STT_TASK_DONE, task)
         tx = (update.transcript or "").strip()
-        if tx:
+        if tx and (
+            task.get("confidence") is None
+            or task.get("confidence", 0) >= AUTO_NOTE_CONFIDENCE_MIN
+        ):
             await _sync_structure_note_from_transcript(
                 sid,
                 tx,
@@ -317,6 +360,7 @@ async def upload_audio(
         "utterance_start_ms": utterance_start_ms,
         "status":           "pending",
         "transcript":       None,
+        "confidence":       None,
         "error":            None,
         "created_at":       now,
         "updated_at":       now,
