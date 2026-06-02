@@ -29,24 +29,67 @@
 
 ## Quick Start
 
-```bash
-# 1) Backend
-cd backend
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # then fill in OPENAI_API_KEY
-# Use the venv’s Python so deps (e.g. influxdb_client) match pip — not a global `uvicorn` on PATH.
-./venv/bin/python -m uvicorn app.main:app --reload
+Clone and switch to the confidence branch:
 
-# 2) Frontend (in another terminal)
-cd frontend
+```bash
+git clone git@github.com:NASA-JPL-ASTRA/ASTRA.git
+cd ASTRA
+git checkout confidence
+git pull origin confidence
+```
+
+Start the backend:
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+Edit `backend/.env` and set at least:
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_STT_MODEL=gpt-4o-mini-transcribe
+OPENAI_STT_LANGUAGE=en
+STT_ENGLISH_ONLY_GATE=true
+```
+
+For confidence scores, use `gpt-4o-mini-transcribe` or `gpt-4o-transcribe`.
+Avoid `gpt-4o-transcribe-diarize` for demos because it does not expose the same
+token log-probabilities used by the confidence scorer.
+
+Run the backend with the virtualenv Python:
+
+```bash
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+```
+
+Start the frontend in another terminal from the repository root:
+
+```bash
+cd /path/to/ASTRA/frontend
 npm install
-cp .env.example .env.local    # adjust URLs if backend is not on :8000
+cp .env.example .env.local
 npm run dev
 ```
 
 Backend Swagger UI: <http://localhost:8000/docs>  
 Frontend dev UI:    <http://localhost:5173>
+
+If confidence scores show as `0%`, verify:
+
+```bash
+git branch --show-current
+git log --oneline -3
+```
+
+The branch must be `confidence`, the latest commits should include
+`Restore STT confidence filtering`, and the backend must be restarted after
+editing `backend/.env`.
 
 ## Repository Layout
 
