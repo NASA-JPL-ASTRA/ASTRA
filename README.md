@@ -1,171 +1,170 @@
-# ASTRA — Advanced System for Testbed Recording and Analysis
+# ASTRA
 
-> UW ENGINE Capstone Project, sponsored by NASA JPL. Records testbed sessions in the browser, transcribes
-> voice notes through OpenAI STT, and stores structured notes & telemetry that
-> can be exported to Markdown / JSON.
->
-
+Advanced System for Testbed Recording and Analysis. ASTRA records browser-based
+testbed sessions, transcribes voice notes with OpenAI STT, and stores notes plus
+telemetry for review and export.
 
 ## Architecture
 
-```
-┌──────────────┐   audio chunks    ┌────────────┐   transcribe    ┌────────┐
-│  Frontend    │ ────────────────▶ │  Backend   │ ──────────────▶ │ OpenAI │
-│  (React/Vite)│                   │ (FastAPI)  │ ◀────────────── │  STT   │
-│              │ ◀──── WS ─────── │            │                  └────────┘
-└──────────────┘  note.created     └────────────┘
-                  stt.task.done           │
-                                           ▼
-                                     in-memory DB
-                                  (sessions / notes /
-                                   telemetry / stt_tasks)
+```text
+Frontend (React/Vite)
+  -> POST audio chunks
+Backend (FastAPI)
+  -> OpenAI STT
+  -> WebSocket live transcript / notes
+  -> In-memory sessions + notes
+  -> InfluxDB telemetry queries
 ```
 
-- **Backend**: FastAPI service. Owns sessions, notes, telemetry, WebSocket
-  broadcasting, and OpenAI-based speech-to-text. Storage is in-memory today
-  (Postgres is on the roadmap).
-- **Frontend**: React + TypeScript + Vite. Captures microphone audio, uploads
-  chunks to the backend, and renders live transcripts / notes via WebSocket.
+- Backend: `backend/`
+- Frontend: `frontend/`
+- Telemetry setup: `telemetry/`
 
-## Quick Start
+## Local Setup
 
-Clone or update the branch that contains transcript confidence support:
+### Backend
+
+Use this for local development. `--reload` restarts the backend when files in
+`backend/app/` change.
 
 ```bash
-git clone git@github.com:NASA-JPL-ASTRA/ASTRA.git
-cd ASTRA
-git checkout confidence
-git pull origin confidence
-git log --oneline -3
-```
-
-The latest commits on this branch should include confidence-related changes such
-as `Lower auto note confidence threshold` and `Remove manual note confirmation`.
-If normal SSH to GitHub hangs, pull over SSH port 443 instead:
-
-```bash
-git pull ssh://git@ssh.github.com:443/NASA-JPL-ASTRA/ASTRA.git confidence
-```
-
-```bash
-# 1) Backend
 cd backend
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt
-cp .env.example .env          # then fill in OPENAI_API_KEY
-# Use the venv’s Python so deps (e.g. influxdb_client) match pip — not a global `uvicorn` on PATH.
-./venv/bin/python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+cp .env.example .env
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+```
 
-# 2) Frontend (in another terminal)
+Set at least `OPENAI_API_KEY` in `backend/.env`. For telemetry, also set:
+
+```env
+INFLUX_URL=http://localhost:8086
+INFLUX_TOKEN=aistra-dev-token-12345
+INFLUX_ORG=aistra-org
+INFLUX_BUCKET=telemetry
+```
+
+Backend docs: <http://localhost:8000/docs>  
+Health check: <http://localhost:8000/health>
+
+### Frontend
+
+```bash
 cd frontend
 npm install
-cp .env.example .env.local    # adjust URLs if backend is not on :8000
+cp .env.example .env.local
 npm run dev
 ```
 
-Backend Swagger UI: <http://localhost:8000/docs>  
-Frontend dev UI:    <http://localhost:5173>
+Default frontend env:
 
-### Anaconda / Conda Python
+```env
+VITE_API_URL=http://localhost:8000/api
+VITE_SESSION_WS_URL=ws://localhost:8000/ws/sessions
+```
 
-If your terminal prompt shows `(base)` and `python3 -m venv venv` fails with
-`ensurepip` errors or `pip` segmentation faults, do not keep using that broken
-`venv`. Remove it and use a clean conda environment instead:
+Frontend: <http://localhost:5173>
+
+## Production on EC2
+
+### Backend
+
+The EC2 backend runs with Docker Compose. Make sure Docker and Docker Compose
+are installed on the instance, then create `backend/.env`:
 
 ```bash
-cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
-deactivate 2>/dev/null || true
-rm -rf venv
-
-conda create -n astra python=3.11 -y
-conda activate astra
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
-cp -n .env.example .env
-python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+cp backend/.env.example backend/.env
 ```
 
-For later backend runs:
+Set the backend secret in `backend/.env`:
+
+```env
+OPENAI_API_KEY=real_key
+```
+
+Set Docker Compose production values in a root `.env` file or in the shell:
+
+```env
+BACKEND_CORS_ORIGINS=https://your-domain.com
+INFLUX_TOKEN=strong_production_token
+INFLUX_ORG=your_org
+INFLUX_BUCKET=telemetry
+```
+
+Start the backend and InfluxDB:
 
 ```bash
-cd /Users/haochenzhao/Desktop/ASTRA-dev/backend
-conda activate astra
-python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
+docker compose up -d --build backend
+docker compose ps
+curl http://localhost:8000/health
 ```
 
-## Confidence Score Checklist
+`docker-compose.yml` builds `backend/Dockerfile`, starts InfluxDB, and restarts
+containers automatically with `restart: unless-stopped`.
 
-If confidence scores show as `0%` on another machine, check these first:
+### Frontend
+
+Build the frontend with production API URLs. This project does not currently
+serve the frontend through Docker, so serve `frontend/dist/` with Nginx or
+another static file server:
 
 ```bash
-git branch --show-current
-git log --oneline -3
+cd frontend
+npm install
+cp .env.example .env.production
+npm run build
 ```
 
-The branch must be `confidence`, and the latest commits must include the
-confidence-score commits. After pulling, restart both backend and frontend; a
-browser refresh alone is not enough if the old backend process is still running.
+Example `frontend/.env.production`:
 
-The backend logs one line per completed STT task when confidence is calculated:
-
-```text
-STT confidence task=... value=... source=... logprob_count=...
+```env
+VITE_API_URL=https://your-domain.com/api
+VITE_SESSION_WS_URL=wss://your-domain.com/ws/sessions
 ```
 
-If this line never appears, the backend is not running the confidence branch, or
-the audio never reached the STT route. If the line appears but the frontend still
-shows `0%`, check `frontend/.env.local` and make sure `VITE_API_URL` and
-`VITE_SESSION_WS_URL` point to the backend you just restarted.
+Typical EC2 setup:
 
-Notes are created only when the transcript passes text-quality filters and has
-confidence at least `65%`. Lower-confidence transcripts may still appear in the
-live transcript panel, but they are not saved as notes.
+- Nginx serves the frontend on `https://your-domain.com`
+- Nginx proxies `/api` to `http://127.0.0.1:8000/api`
+- Nginx proxies `/ws` to `http://127.0.0.1:8000/ws`
+- The EC2 security group opens `80` and `443`, but not `8000`
 
-## Reducing STT Hallucinations
+## InfluxDB
 
-Background noise can be transcribed as fake speech by any speech-to-text model.
-ASTRA reduces this in three places:
+```bash
+docker compose up -d influxdb
+curl http://localhost:8086/health
 
-- The browser enables echo cancellation and noise suppression before upload.
-- Very quiet chunks and very short bursts are dropped before they reach OpenAI.
-- The backend does not save transcripts below `65%` confidence into notes.
-
-For demos, use a headset or directional microphone, keep the room quiet, and
-pause briefly between phrases. If hallucinations still appear in the live panel,
-check whether the confidence is low; low-confidence text is expected to be
-visible for operator review but excluded from saved notes.
-
-## Repository Layout
-
+python -m pip install -r telemetry/requirements.txt
+./telemetry/ingest_all.sh
 ```
-ATSRA/
-├── backend/                 FastAPI service
-│   ├── app/                 Routes, services, in-memory DB
-│   ├── docs/api-contract.md REST + WebSocket reference
-│   └── README.md
-├── frontend/                React + Vite client
-│   └── README.md
-└── README.md                (this file)
+
+Verify backend telemetry queries:
+
+```bash
+curl "http://localhost:8000/api/query/events?session=test_4_motor_stall&t0=0&t1=4102444800&limit=5"
 ```
 
 ## Documentation
 
-| Topic | English | 中文 |
-|-------|---------|------|
-| Project overview | `README.md` | `README.zh.md` |
-| Backend setup    | `backend/README.md`  | `backend/README.zh.md` |
-| Frontend setup   | `frontend/README.md` | `frontend/README.zh.md` |
-| API contract (REST + WS) | `backend/docs/api-contract.md` | `backend/docs/api-contract.zh.md` |
-| InfluxDB telemetry setup | `telemetry/INFLUX_SETUP.md` | — |
+| Topic | File |
+|-------|------|
+| Project overview | `README.md` |
+| Backend setup | `backend/README.md` |
+| Frontend setup | `frontend/README.md` |
+| API contract | `backend/docs/api-contract.md` |
+| InfluxDB setup | `telemetry/INFLUX_SETUP.md` |
 
-## Secrets & Environment
+## Environment Files
 
-Two env files are needed locally (both are git-ignored):
+Real env files are git-ignored:
 
-- `backend/.env`        — copy from `backend/.env.example`, set `OPENAI_API_KEY`
-- `frontend/.env.local` — copy from `frontend/.env.example`
+- `backend/.env`
+- `frontend/.env.local`
 
-Never commit real keys. See `backend/README.md` for the supported variables.
+Only templates should be committed:
 
+- `backend/.env.example`
+- `frontend/.env.example`
