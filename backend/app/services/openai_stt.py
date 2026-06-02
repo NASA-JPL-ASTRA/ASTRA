@@ -11,6 +11,13 @@ SUPPORTED_STT_MODELS = {
     "gpt-4o-transcribe-diarize",
 }
 
+# Models that return token-level log probabilities via `include[]=logprobs`.
+# Diarize is intentionally excluded because it does not expose logprobs today.
+LOGPROB_CAPABLE_MODELS = {
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe",
+}
+
 
 @dataclass(slots=True)
 class OpenAITranscriptionEvent:
@@ -58,6 +65,8 @@ class OpenAIStreamingTranscriptionService:
             "model": resolved_model,
             "stream": "true",
         }
+        if resolved_model in LOGPROB_CAPABLE_MODELS:
+            form_data["include[]"] = "logprobs"
         resolved_language = language or self.language
         resolved_prompt = prompt or self.prompt
         if resolved_language:

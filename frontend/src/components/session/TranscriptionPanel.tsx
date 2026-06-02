@@ -286,9 +286,9 @@ function TranscriptionEntryRow({
             <div className="flex items-center gap-1.5">
               <div
                 className={`w-2 h-2 rounded-full ${
-                  entry.confidence > 0.9
+                  entry.confidence >= 0.85
                     ? 'bg-accent-green'
-                    : entry.confidence > 0.8
+                    : entry.confidence >= 0.65
                       ? 'bg-accent-amber'
                       : 'bg-accent-red'
                 }`}
